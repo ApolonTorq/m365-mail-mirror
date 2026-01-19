@@ -1,0 +1,8 @@
+{
+    // Disable rule MD034 (bare URL used)
+    "MD034": false,
+    // Disable rule MD013 (max line length)
+    "MD013": false,
+    // Disable rule MD040 (fenced code blocks should have a language specified)
+    "MD040": false
+}
