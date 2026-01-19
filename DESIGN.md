@@ -6,21 +6,35 @@ This document describes the technical architecture and implementation details of
 
 The tool implements a **Download → Store → Transform** pipeline architecture:
 
-```
-Microsoft 365          Local Storage          Derived Outputs
-     │                      │                       │
-     │  ┌──────────┐       │  ┌──────────┐        │  ┌──────────┐
-     └─>│   Sync   │──────>│  │   EML    │───────>│  │   HTML   │
-        │  Engine  │       │  │  Files   │        │  │ Markdown │
-        └──────────┘       │  │(Canonical)│        │  │Attachmts │
-             │              │  └──────────┘        │  └──────────┘
-             │              │       │               │       ▲
-             ▼              │       │               │       │
-        ┌──────────┐       │  ┌────▼─────┐        │  ┌────┴─────┐
-        │  State   │◄──────┼──│ SQLite   │        └──│Transform │
-        │ Manager  │       │  │ Database │           │  Engine  │
-        └──────────┘       │  └──────────┘           └──────────┘
-                           │
+```mermaid
+graph LR
+    subgraph M365["Microsoft 365"]
+        MS365[Microsoft 365<br/>Mailbox]
+    end
+
+    subgraph LocalStorage["Local Storage"]
+        EML[EML Files<br/>Canonical]
+        DB[(SQLite<br/>Database)]
+    end
+
+    subgraph DerivedOutputs["Derived Outputs"]
+        HTML[HTML]
+        MD[Markdown]
+        ATT[Attachments]
+    end
+
+    SyncEngine[Sync Engine]
+    StateManager[State Manager]
+    TransformEngine[Transform Engine]
+
+    MS365 -->|Download| SyncEngine
+    SyncEngine -->|Write| EML
+    SyncEngine -->|Update| StateManager
+    StateManager <-->|Query/Store| DB
+    EML -->|Read| TransformEngine
+    TransformEngine -->|Generate| HTML
+    TransformEngine -->|Generate| MD
+    TransformEngine -->|Extract| ATT
 ```
 
 ### Component Responsibilities
@@ -1434,6 +1448,686 @@ return htmlDoc.DocumentNode.OuterHtml;
 - `strip_external_images: true`: Remove `<img src="http...">` tags
 
 **Data URIs**: Always preserved (embedded images, no external fetch)
+
+## Testing Architecture
+
+### Testing Strategy Overview
+
+The testing strategy follows a three-tier pyramid approach designed to ensure code quality while maintaining practical development workflows:
+
+1. **Unit Tests**: Fast, isolated tests without external dependencies
+2. **Integration Tests**: In-process tests requiring tenant configuration
+3. **End-to-End (E2E) Tests**: External process tests validating CLI behavior
+
+All tiers work without dependence on specific tenant data, ensuring tests are portable across different Microsoft 365 environments.
+
+### Test Technology Stack
+
+#### Testing Framework
+
+- **xUnit** (v2.6+): Primary testing framework
+  - Rationale: Industry standard for .NET, excellent async support, parallel test execution
+  - Alternatives considered: NUnit (less modern async support), MSTest (less community adoption)
+
+#### Mocking and Fakes
+
+- **Moq** (v4.20+): Mocking framework for unit tests
+  - Purpose: Mock Microsoft.Graph SDK, IGraphServiceClient, file system operations
+- **Microsoft.Extensions.Http**: For mocking HttpClient in Graph API interactions
+- **In-Memory SQLite**: For database testing without persistent state
+
+#### Assertion Libraries
+
+- **FluentAssertions** (v6.12+): Readable assertion syntax
+  - Enhances xUnit assertions with expressive, chainable syntax
+  - Example: `result.Should().BeEquivalentTo(expected)`
+
+#### Test Data Builders
+
+- **Bogus** (v35+): Generate realistic test data
+  - Creates fake email addresses, subjects, dates for test messages
+  - Ensures test data variety without manual creation
+
+#### E2E Test Utilities
+
+- **CliWrap** (v3.6+): Execute CLI as external process, capture output
+  - Purpose: Run m365-mail-mirror commands and validate stdout/stderr
+
+#### CI/CD Support
+
+- **GitHub Actions**: Automated test execution
+  - Unit tests run on every PR and commit to main
+  - Integration/E2E tests require manual trigger with secrets
+
+### Unit Tests
+
+**Scope**: Test individual components in isolation without external dependencies.
+
+**Key Characteristics**:
+
+- No Microsoft 365 tenant access required
+- Run in CI/CD without authentication
+- Fast execution (< 1 second per test)
+- Mock all external dependencies (Graph API, filesystem, database)
+
+**Test Projects**:
+
+```
+tests/
+├── UnitTests/
+│   ├── Commands/
+│   │   ├── SyncCommandTests.cs
+│   │   ├── TransformCommandTests.cs
+│   │   ├── AuthCommandTests.cs
+│   │   └── VerifyCommandTests.cs
+│   ├── Services/
+│   │   ├── GraphApiServiceTests.cs
+│   │   ├── EmlStorageServiceTests.cs
+│   │   ├── TransformationEngineTests.cs
+│   │   └── StateManagerTests.cs
+│   ├── Transformations/
+│   │   ├── HtmlGeneratorTests.cs
+│   │   ├── MarkdownGeneratorTests.cs
+│   │   └── AttachmentExtractorTests.cs
+│   ├── Security/
+│   │   ├── ExecutableFilterTests.cs
+│   │   └── ZipExtractionSafetyTests.cs
+│   └── Utilities/
+│       ├── FilenameSanitizerTests.cs
+│       └── PathUtilsTests.cs
+```
+
+**Example Test Patterns**:
+
+**Mocking Graph API**:
+
+```csharp
+// Mock IGraphServiceClient for sync operations
+var mockGraphClient = new Mock<IGraphServiceClient>();
+mockGraphClient
+    .Setup(g => g.Users["me"].Messages.Request().GetAsync())
+    .ReturnsAsync(mockMessageCollectionPage);
+```
+
+**In-Memory SQLite**:
+
+```csharp
+// Use in-memory database for state tracking tests
+var connection = new SqliteConnection("DataSource=:memory:");
+await connection.OpenAsync();
+// Run schema migrations, insert test data
+```
+
+**Filesystem Abstraction**:
+
+```csharp
+// Mock IFileSystem for EML storage tests
+var mockFileSystem = new Mock<IFileSystem>();
+mockFileSystem
+    .Setup(fs => fs.WriteAllBytesAsync(It.IsAny<string>(), It.IsAny<byte[]>()))
+    .Returns(Task.CompletedTask);
+```
+
+**Critical Unit Test Scenarios**:
+
+- Filename sanitization (illegal characters, path length limits)
+- ZIP path safety validation (traversal attacks, absolute paths)
+- Executable file filtering (blocked extensions)
+- MIME parsing (multipart messages, attachments, inline images)
+- HTML sanitization (script stripping, XSS prevention)
+- Transformation state tracking (config version detection)
+- Delta query handling (new/deleted/moved messages)
+- Batch checkpointing (resume after interruption)
+
+### Integration Tests
+
+**Scope**: Test components working together with real Microsoft Graph API, but running in-process (not as external CLI).
+
+**Key Characteristics**:
+
+- Require Microsoft 365 tenant access
+- Developer provides tenant configuration (not in source control)
+- Use real Microsoft.Graph SDK (no mocking)
+- Programmatically confirm correct operation
+- NOT run as external process (use in-process API calls)
+- Run manually by developers (not in CI/CD)
+
+**Test Projects**:
+
+```
+tests/
+├── IntegrationTests/
+│   ├── appsettings.json (gitignored - developer supplies)
+│   ├── AuthenticationTests.cs
+│   ├── GraphApiDownloadTests.cs
+│   ├── FolderEnumerationTests.cs
+│   ├── DeltaQueryTests.cs
+│   ├── FullSyncWorkflowTests.cs
+│   └── TransformationRoundTripTests.cs
+```
+
+**Configuration (gitignored)**:
+
+```json
+// tests/IntegrationTests/appsettings.json
+{
+  "TestConfiguration": {
+    "ClientId": "developer-provided-app-id",
+    "TenantId": "common",
+    "OutputPath": "d:/temp/mail-mirror-integration-tests"
+  }
+}
+```
+
+**Authentication in Tests**:
+
+- Developer runs tests manually
+- Uses device code flow interactively
+- Tokens cached in test output directory (not source control)
+- Tests skip if authentication fails (with clear message)
+
+**Example Test Patterns**:
+
+**Device Code Flow Test**:
+
+```csharp
+[Fact(Skip = "Requires manual device code entry")]
+public async Task AuthenticateWithDeviceCodeFlow_Success()
+{
+    var authService = new AuthenticationService(config);
+    var result = await authService.AuthenticateAsync();
+
+    result.Should().NotBeNull();
+    result.AccessToken.Should().NotBeNullOrEmpty();
+}
+```
+
+**Real Graph API Download**:
+
+```csharp
+[Fact(Skip = "Requires tenant access")]
+public async Task DownloadMessages_FromInbox_Success()
+{
+    // Use real IGraphServiceClient with real credentials
+    var graphService = new GraphApiService(authenticatedClient);
+    var messages = await graphService.GetMessagesAsync("Inbox", batchSize: 10);
+
+    messages.Should().NotBeNull();
+    messages.Should().NotBeEmpty();
+    messages.All(m => m.Subject != null).Should().BeTrue();
+}
+```
+
+**Folder Enumeration Test**:
+
+```csharp
+[Fact(Skip = "Requires tenant access")]
+public async Task EnumerateFolders_Recursive_Success()
+{
+    var graphService = new GraphApiService(authenticatedClient);
+    var folders = await graphService.GetAllFoldersAsync();
+
+    folders.Should().Contain(f => f.DisplayName == "Inbox");
+    folders.Should().Contain(f => f.DisplayName == "Sent Items");
+}
+```
+
+**Critical Integration Test Scenarios**:
+
+- Device code flow authentication (manual interaction)
+- Token refresh and expiration handling
+- Downloading messages from real mailbox
+- Folder enumeration (including nested folders)
+- Delta query incremental sync
+- Handling rate limiting (throttling headers)
+- Large attachment download
+- Malformed message handling (if test mailbox has corrupted messages)
+- Full sync → transform → verify workflow
+
+**Test Data Independence**:
+
+- Tests do not assume specific message counts
+- Tests filter by recent dates to avoid old data
+- Tests create test folders/messages if needed (then clean up)
+- Assertions are flexible (e.g., "at least 1 message" not "exactly 42 messages")
+
+### End-to-End (E2E) Tests
+
+**Scope**: Run the compiled CLI tool as an external process, validate command-line behavior.
+
+**Key Characteristics**:
+
+- Run utility as external process (via CliWrap)
+- Test all command-line arguments and flags
+- Validate stdout/stderr output
+- Check exit codes
+- Verify file system state after commands
+- Developer manually supplies device code authentication
+- No dependence on specific tenant data
+
+**Test Projects**:
+
+```
+tests/
+├── E2ETests/
+│   ├── appsettings.json (gitignored)
+│   ├── CliTestFixture.cs (base class for CLI execution)
+│   ├── Commands/
+│   │   ├── AuthCommandE2ETests.cs
+│   │   ├── SyncCommandE2ETests.cs
+│   │   ├── TransformCommandE2ETests.cs
+│   │   ├── StatusCommandE2ETests.cs
+│   │   └── VerifyCommandE2ETests.cs
+│   └── Workflows/
+│       ├── FirstRunWorkflowTests.cs
+│       └── IncrementalSyncWorkflowTests.cs
+```
+
+**Example Test Patterns**:
+
+**CLI Execution Helper**:
+
+```csharp
+public class CliTestFixture
+{
+    private readonly string _cliPath;
+    private readonly string _testOutputPath;
+
+    public async Task<CommandResult> RunAsync(string arguments)
+    {
+        var result = await Cli.Wrap(_cliPath)
+            .WithArguments(arguments)
+            .WithWorkingDirectory(_testOutputPath)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync();
+
+        return new CommandResult
+        {
+            ExitCode = result.ExitCode,
+            StdOut = result.StandardOutput,
+            StdErr = result.StandardError
+        };
+    }
+}
+```
+
+**Auth Command Test**:
+
+```csharp
+[Fact(Skip = "Requires manual device code entry")]
+public async Task AuthLogin_DisplaysDeviceCode_Success()
+{
+    var result = await _cli.RunAsync("auth login");
+
+    result.ExitCode.Should().Be(0);
+    result.StdOut.Should().Contain("https://microsoft.com/devicelogin");
+    result.StdOut.Should().MatchRegex(@"code [A-Z0-9]{8}");
+}
+```
+
+**Sync Command Test**:
+
+```csharp
+[Fact(Skip = "Requires tenant access")]
+public async Task Sync_InitialRun_DownloadsMessages()
+{
+    // Assume auth already completed
+    var result = await _cli.RunAsync("sync --batch-size 10");
+
+    result.ExitCode.Should().Be(0);
+    result.StdOut.Should().Contain("Messages synced:");
+
+    // Verify filesystem state
+    var emlFiles = Directory.GetFiles(
+        Path.Combine(_testOutputPath, "eml"),
+        "*.eml",
+        SearchOption.AllDirectories
+    );
+    emlFiles.Should().NotBeEmpty();
+}
+```
+
+**Dry-Run Flag Test**:
+
+```csharp
+[Fact(Skip = "Requires tenant access")]
+public async Task Sync_DryRun_NoFilesCreated()
+{
+    var result = await _cli.RunAsync("sync --dry-run");
+
+    result.ExitCode.Should().Be(0);
+    result.StdOut.Should().Contain("Dry run");
+
+    var emlFiles = Directory.GetFiles(
+        Path.Combine(_testOutputPath, "eml"),
+        "*.eml",
+        SearchOption.AllDirectories
+    );
+    emlFiles.Should().BeEmpty();
+}
+```
+
+**Transform Command Test**:
+
+```csharp
+[Fact]
+public async Task Transform_GeneratesHtml_Success()
+{
+    // Assume EML files already exist from prior sync
+    var result = await _cli.RunAsync("transform --only html");
+
+    result.ExitCode.Should().Be(0);
+    result.StdOut.Should().Contain("HTML:");
+
+    var htmlFiles = Directory.GetFiles(
+        Path.Combine(_testOutputPath, "html"),
+        "*.html",
+        SearchOption.AllDirectories
+    );
+    htmlFiles.Should().NotBeEmpty();
+}
+```
+
+**Status Command Test**:
+
+```csharp
+[Fact]
+public async Task Status_ShowsSyncState_Success()
+{
+    var result = await _cli.RunAsync("status");
+
+    result.ExitCode.Should().Be(0);
+    result.StdOut.Should().Contain("Mailbox:");
+    result.StdOut.Should().Contain("Messages:");
+}
+```
+
+**Invalid Argument Test**:
+
+```csharp
+[Fact]
+public async Task Sync_InvalidFlag_ReturnsError()
+{
+    var result = await _cli.RunAsync("sync --invalid-flag");
+
+    result.ExitCode.Should().NotBe(0);
+    result.StdErr.Should().Contain("Unknown option");
+}
+```
+
+**Critical E2E Test Scenarios**:
+
+- Help text display (--help for each command)
+- Version display (--version)
+- Invalid command/flag handling
+- Auth login workflow (manual device code)
+- Auth status (before and after login)
+- Sync with various flags (--batch-size, --parallel, --dry-run)
+- Transform with filters (--only html, --force)
+- Status output formatting
+- Verify integrity checks
+- Config file loading (default location, --config override)
+- Exit codes (success, failure, interrupted)
+- Stdout vs stderr separation
+
+### Test Data Management
+
+**Philosophy**: Tests should not depend on specific tenant data (e.g., "message with subject 'Welcome Email' exists").
+
+**Approaches**:
+
+**Unit Tests**:
+
+- Generate fake data with Bogus library
+- Create MimeMessage objects programmatically
+- Use test fixtures for known EML file structures
+
+**Integration Tests**:
+
+- Query recent messages (last 7 days) to avoid stale data
+- Filter by date ranges, not absolute counts
+- Use flexible assertions ("at least 1", not "exactly 42")
+- Create temporary test folders/messages, then clean up
+
+**E2E Tests**:
+
+- Use small batch sizes (--batch-size 10) to minimize data volume
+- Test against isolated test output directory
+- Clean up test directory between runs
+
+**Test EML Fixtures**:
+
+```
+tests/
+├── Fixtures/
+│   ├── simple-plaintext-email.eml
+│   ├── multipart-html-email.eml
+│   ├── email-with-attachments.eml
+│   ├── email-with-inline-images.eml
+│   ├── malformed-mime-email.eml
+│   └── email-with-dangerous-zip.eml
+```
+
+### CI/CD Integration
+
+**GitHub Actions Workflow** (`.github/workflows/test.yml`):
+
+```yaml
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  unit-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore dependencies
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --no-restore
+      - name: Run unit tests
+        run: dotnet test tests/UnitTests --no-build --verbosity normal
+
+  # Integration and E2E tests are manual-trigger only
+  # (require tenant access and secrets)
+```
+
+**Test Execution Matrix**:
+
+| Test Tier   | CI/CD  | Platforms           | Authentication     | Tenant Required |
+|-------------|--------|---------------------|--------------------|-----------------|
+| Unit        | ✅ Yes | Windows/macOS/Linux | None               | ❌ No           |
+| Integration | ❌ No  | Developer local     | Manual device code | ✅ Yes          |
+| E2E         | ❌ No  | Developer local     | Manual device code | ✅ Yes          |
+
+**Code Coverage**:
+
+- Target: 80%+ unit test coverage
+- Tool: coverlet (integrated with dotnet test)
+- Report: Codecov or Coveralls for PR visibility
+
+**Coverage Command**:
+
+```bash
+dotnet test tests/UnitTests \
+  /p:CollectCoverage=true \
+  /p:CoverletOutputFormat=opencover \
+  /p:Exclude="[xunit.*]*"
+```
+
+### Test Organization Principles
+
+**Directory Structure**:
+
+```
+m365-mail-mirror/
+├── src/
+│   ├── Cli/                      # Main CLI project
+│   ├── Core/                     # Core business logic
+│   └── Infrastructure/           # Graph API, filesystem
+├── tests/
+│   ├── UnitTests/
+│   │   ├── UnitTests.csproj
+│   │   └── [mirrors src/ structure]
+│   ├── IntegrationTests/
+│   │   ├── IntegrationTests.csproj
+│   │   ├── appsettings.json (gitignored)
+│   │   └── [test files]
+│   ├── E2ETests/
+│   │   ├── E2ETests.csproj
+│   │   ├── appsettings.json (gitignored)
+│   │   └── [test files]
+│   └── Fixtures/
+│       └── [shared test EML files]
+└── .github/
+    └── workflows/
+        └── test.yml
+```
+
+**Naming Conventions**:
+
+- Unit test classes: `{ClassName}Tests.cs` (e.g., `SyncCommandTests.cs`)
+- Integration tests: `{Feature}IntegrationTests.cs` or `{Feature}Tests.cs`
+- E2E tests: `{Command}E2ETests.cs`
+- Test methods: `{MethodName}_{Scenario}_{ExpectedResult}` (e.g., `SyncCommand_DryRun_NoFilesCreated`)
+
+**Test Categories**:
+
+```csharp
+// Skip tests requiring external dependencies
+[Trait("Category", "Integration")]
+[Fact(Skip = "Requires tenant access")]
+
+// Mark platform-specific tests
+[Trait("Platform", "Windows")]
+
+// Mark slow tests
+[Trait("Speed", "Slow")]
+```
+
+**Run Specific Categories**:
+
+```bash
+# Unit tests only
+dotnet test --filter Category!=Integration
+
+# Windows-specific tests
+dotnet test --filter Platform=Windows
+
+# Fast tests only
+dotnet test --filter Speed!=Slow
+```
+
+### Testing Best Practices
+
+**Unit Test Principles**:
+
+- Each test tests one thing (single assertion focus)
+- Tests are independent (no shared state)
+- Fast execution (mock expensive operations)
+- Readable test names describe behavior
+- Use Arrange-Act-Assert pattern
+
+**Integration Test Principles**:
+
+- Clean up test data after each run
+- Use flexible assertions (handle data variability)
+- Skip gracefully if tenant access unavailable
+- Document manual setup steps
+
+**E2E Test Principles**:
+
+- Test realistic user workflows
+- Validate both success and error paths
+- Check exit codes, stdout, stderr
+- Verify file system state
+- Use isolated test directories
+
+**Test Data Builders**:
+
+```csharp
+public class MessageBuilder
+{
+    private string _subject = "Test Message";
+    private string _from = "sender@example.com";
+
+    public MessageBuilder WithSubject(string subject)
+    {
+        _subject = subject;
+        return this;
+    }
+
+    public MimeMessage Build()
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(_from));
+        message.Subject = _subject;
+        // ...
+        return message;
+    }
+}
+
+// Usage in tests
+var message = new MessageBuilder()
+    .WithSubject("Meeting Notes")
+    .WithAttachment("document.pdf")
+    .Build();
+```
+
+### Debugging and Troubleshooting
+
+**Test Logging**:
+
+- xUnit captures ITestOutputHelper output
+- Use for debugging test failures
+- Logs shown only for failed tests
+
+```csharp
+public class SyncCommandTests
+{
+    private readonly ITestOutputHelper _output;
+
+    public SyncCommandTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
+    [Fact]
+    public async Task TestMethod()
+    {
+        _output.WriteLine("Debug: Starting test");
+        // Test logic
+    }
+}
+```
+
+**Running Single Tests**:
+
+```bash
+# Run specific test class
+dotnet test --filter FullyQualifiedName~SyncCommandTests
+
+# Run specific test method
+dotnet test --filter FullyQualifiedName~SyncCommand_DryRun_NoFilesCreated
+```
+
+**Debugging in IDE**:
+
+- Visual Studio: Right-click test → Debug Test
+- Rider: Click debug icon next to test
+- VS Code: Use C# Dev Kit extension
 
 ## Future Considerations
 

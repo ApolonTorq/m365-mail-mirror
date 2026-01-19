@@ -25,19 +25,20 @@ This file provides a concise overview of the project architecture and documentat
   - Sync mechanisms (initial, incremental, delta queries)
   - Database schema (SQLite state tracking)
   - Platform considerations (Windows/macOS/Linux)
+  - Testing architecture (three-tier strategy: unit, integration, E2E)
+  - CI/CD integration (GitHub Actions for unit tests)
+
+- **[WBS.md](WBS.md)**: Work Breakdown Structure
+  - Implementation status tracking across versions
+  - Feature-oriented hierarchical breakdown
+  - Checkbox completion tracking (unchecked = not implemented, checked = complete with tests)
+  - Version-organized (currently v1.0)
+  - Guides implementation priorities and progress visibility
 
 - **[decisions/](decisions/)**: Architecture Decision Records (ADRs)
   - Historical records of key architectural decisions
   - Focus on "why" a decision was made and "what" alternatives were considered
   - Do NOT contain detailed implementation specifics (schemas, code, exact configurations)
-  - Specific ADRs:
-    - ADR-001: Microsoft Graph API (why Graph over EWS/IMAP)
-    - ADR-002: Device Code Flow Authentication
-    - ADR-003: EML-First Storage with Transformations
-    - ADR-004: SQLite for State Tracking
-    - ADR-005: Quarantine Over Deletion
-    - ADR-006: Separate Transform Command
-    - ADR-007: ZIP Extraction and Executable Filtering
 
 - **This file (CLAUDE.md)**: Quick navigation for AI assistants
 
@@ -144,6 +145,14 @@ The tool separates downloading (network I/O via sync command) from transformatio
 
 See [README.md](README.md) for command usage and options.
 
+### Testing Strategy
+
+**Three-tier test pyramid**: Unit tests (fast, mocked dependencies) → Integration tests (real Graph API, in-process) → E2E tests (external CLI execution).
+
+**Unit tests** run in CI/CD on every PR without tenant access. **Integration and E2E tests** require manual device code authentication and tenant configuration (not in source control).
+
+See [DESIGN.md](DESIGN.md) for detailed testing architecture, test project structure, and CI/CD configuration.
+
 ## Key Design Decisions
 
 See [decisions/](decisions/) for full Architecture Decision Records (ADRs):
@@ -165,6 +174,7 @@ See [decisions/](decisions/) for full Architecture Decision Records (ADRs):
 - **Database**: Microsoft.Data.Sqlite (embedded SQLite)
 - **Configuration**: YamlDotNet
 - **Authentication**: Microsoft.Identity.Client (MSAL)
+- **Testing**: xUnit, Moq, FluentAssertions, CliWrap
 
 See [DESIGN.md](DESIGN.md) for detailed technology usage patterns and platform considerations.
 
@@ -177,11 +187,13 @@ When implementing features, refer to:
 - **API usage**: See [DESIGN.md](DESIGN.md) section on API Interaction Design
 - **Security**: See [DESIGN.md](DESIGN.md) section on Security Architecture
 - **Platform-specific code**: See [DESIGN.md](DESIGN.md) section on Platform Considerations
+- **Testing patterns**: See [DESIGN.md](DESIGN.md) section on Testing Architecture
 
 ## Quick Reference Links
 
 - **User documentation**: [README.md](README.md)
 - **Technical design**: [DESIGN.md](DESIGN.md)
+- **Work breakdown**: [WBS.md](WBS.md)
 - **Architecture decisions**: [decisions/](decisions/)
 - **Microsoft Graph API**: https://learn.microsoft.com/en-us/graph/
 - **MimeKit documentation**: https://mimekit.net/

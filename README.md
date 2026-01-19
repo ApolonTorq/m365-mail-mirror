@@ -391,6 +391,46 @@ For detailed documentation, see:
 - **Issues**: Report bugs or request features on GitHub Issues
 - **CLI help**: Run `m365-mail-mirror --help` or `m365-mail-mirror <command> --help`
 
+## Contributing and Development
+
+### Running Tests
+
+The project uses a three-tier testing approach:
+
+**Unit Tests** (no M365 access required):
+
+```bash
+dotnet test tests/UnitTests
+```
+
+These tests run automatically in CI/CD on every pull request.
+
+**Integration Tests** (require M365 tenant):
+
+```bash
+# Configure your test tenant (see tests/IntegrationTests/README.md)
+dotnet test tests/IntegrationTests
+```
+
+**End-to-End Tests** (require M365 tenant):
+
+```bash
+# Configure your test tenant (see tests/E2ETests/README.md)
+dotnet test tests/E2ETests
+```
+
+Integration and E2E tests require manual device code authentication and are not run in CI/CD.
+
+### Development Setup
+
+1. Clone the repository
+2. Install .NET 10 SDK
+3. Restore dependencies: `dotnet restore`
+4. Build: `dotnet build`
+5. Run unit tests: `dotnet test tests/UnitTests`
+
+For detailed testing documentation, see [DESIGN.md](DESIGN.md).
+
 ## License
 
 [To be determined]
