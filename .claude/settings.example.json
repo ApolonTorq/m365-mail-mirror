@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "description": "Example Claude Code settings with flexible permissions for .NET development. Copy this to settings.local.json to use.",
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allowedPrompts": [
+      {
+        "tool": "Bash",
+        "prompt": "run read-only git commands (status, diff, log)"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "stage changes with git add"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet build commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet test commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet restore commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet clean commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet run commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet publish commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run dotnet pack commands"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "list and navigate directory contents"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "create directories for project structure"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run read-only file operations (cat, head, tail)"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "check file existence and properties"
+      }
+    ],
+    "allow": [
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebSearch(*)",
+      "WebFetch(*)",
+      "TodoWrite(*)",
+      "Task(*)",
+      "EnterPlanMode(*)",
+      "ExitPlanMode(*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(dotnet*)",
+      "Bash(ls*)",
+      "Bash(dir*)",
+      "Bash(pwd*)",
+      "Bash(mkdir*)",
+      "Bash(cat*)",
+      "Bash(head*)",
+      "Bash(tail*)",
+      "Bash(test*)",
+      "Bash([ *"
+    ]
+  },
+  "_comments": {
+    "usage": "Copy this file to .claude/settings.local.json to apply these permissions",
+    "what_this_enables": [
+      "File operations: Read, Write, Edit any file without approval",
+      "Code search: Glob and Grep operations",
+      "Web research: WebSearch and WebFetch for documentation lookup",
+      "Task management: TodoWrite for tracking progress, Task for specialized agents",
+      "Planning: EnterPlanMode/ExitPlanMode for complex feature design",
+      "Git (read-only + staging): status, diff, log, add (commits/branches still require approval)",
+      ".NET development: All dotnet commands (build, test, restore, clean, run, publish, pack)",
+      "File system: Directory navigation and read-only file operations"
+    ],
+    "what_requires_approval": [
+      "git commit - Committing changes",
+      "git branch/checkout - Branch operations",
+      "git push/pull - Remote operations",
+      "Any other git commands not explicitly allowed"
+    ]
+  }
+}
