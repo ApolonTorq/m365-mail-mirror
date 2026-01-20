@@ -1,0 +1,43 @@
+<Project>
+  <PropertyGroup>
+    <!-- Shared build configuration for all projects -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Disable rules not appropriate for this project -->
+    <!-- CA1515: Make types internal (not appropriate for public-facing commands) -->
+    <!-- CA2007: ConfigureAwait (not needed in top-level CLI apps) -->
+    <!-- CA1062: Null validation (covered by nullable reference types) -->
+    <!-- CA1707: Underscores in names (standard for test methods) -->
+    <!-- CA1852: Sealed types (too strict for simple test helpers) -->
+    <!-- CA1716: Error method name (standard logging convention) -->
+    <!-- CA1859: Field type specificity (intentionally using interface) -->
+    <NoWarn>$(NoWarn);CA1515;CA2007;CA1062;CA1707;CA1852;CA1716;CA1859</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Assembly metadata -->
+    <Product>m365-mail-mirror</Product>
+    <Company>m365-mail-mirror contributors</Company>
+    <Copyright>Copyright (c) m365-mail-mirror contributors</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Repository information -->
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Release optimizations -->
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+</Project>

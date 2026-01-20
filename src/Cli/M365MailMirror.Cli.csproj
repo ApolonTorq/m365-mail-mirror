@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>m365-mail-mirror</AssemblyName>
+    <RootNamespace>M365MailMirror.Cli</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>Archive Microsoft 365 mailboxes to local storage with EML-first architecture</Description>
+    <Authors>m365-mail-mirror contributors</Authors>
+    <Copyright>Copyright (c) m365-mail-mirror contributors</Copyright>
+
+    <!-- NuGet Package -->
+    <PackageId>m365-mail-mirror</PackageId>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>m365-mail-mirror</ToolCommandName>
+    <PackageOutputPath>./nupkg</PackageOutputPath>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/yourusername/m365-mail-mirror</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yourusername/m365-mail-mirror</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>email;microsoft365;outlook;archive;backup;eml;mime</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Self-contained publish settings -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\M365MailMirror.Core.csproj" />
+    <ProjectReference Include="..\Infrastructure\M365MailMirror.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CliFx" Version="2.3.6" />
+  </ItemGroup>
+
+  <!-- Include README in NuGet package -->
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

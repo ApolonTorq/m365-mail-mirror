@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  build-nuget:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet tool
+        run: dotnet pack src/Cli/M365MailMirror.Cli.csproj --configuration Release --no-build --output ./artifacts/nuget
+
+      - name: Upload NuGet artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package
+          path: ./artifacts/nuget/*.nupkg
+
+  build-executables:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            output: m365-mail-mirror-win-x64.exe
+          - os: ubuntu-latest
+            rid: linux-x64
+            output: m365-mail-mirror-linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+            output: m365-mail-mirror-linux-arm64
+          - os: macos-latest
+            rid: osx-x64
+            output: m365-mail-mirror-osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+            output: m365-mail-mirror-osx-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Publish self-contained executable
+        run: |
+          dotnet publish src/Cli/M365MailMirror.Cli.csproj \
+            --configuration Release \
+            --runtime ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            --output ./artifacts/publish/${{ matrix.rid }}
+
+      - name: Rename executable (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd ./artifacts/publish/${{ matrix.rid }}
+          mv m365-mail-mirror ${{ matrix.output }}
+
+      - name: Rename executable (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd ./artifacts/publish/${{ matrix.rid }}
+          ren m365-mail-mirror.exe ${{ matrix.output }}
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executable-${{ matrix.rid }}
+          path: ./artifacts/publish/${{ matrix.rid }}/${{ matrix.output }}
+
+  create-release:
+    needs: [build-nuget, build-executables]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List artifacts
+        run: ls -la ./artifacts/*
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}
+          files: |
+            ./artifacts/nuget-package/*.nupkg
+            ./artifacts/executable-win-x64/*
+            ./artifacts/executable-linux-x64/*
+            ./artifacts/executable-linux-arm64/*
+            ./artifacts/executable-osx-x64/*
+            ./artifacts/executable-osx-arm64/*
+          generate_release_notes: true
+
+      - name: Publish to NuGet
+        if: "!contains(github.ref, '-')"
+        run: |
+          dotnet nuget push ./artifacts/nuget-package/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
