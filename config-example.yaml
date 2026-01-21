@@ -1,0 +1,380 @@
+# =============================================================================
+# m365-mail-mirror Configuration Example
+# =============================================================================
+#
+# This file documents all available configuration options for m365-mail-mirror.
+#
+# USAGE:
+#   1. Copy this file to one of these locations:
+#      - ~/.config/m365-mail-mirror/config.yaml (default location)
+#        Windows: C:\Users\<username>\.config\m365-mail-mirror\config.yaml
+#        macOS:   /Users/<username>/.config/m365-mail-mirror/config.yaml
+#        Linux:   /home/<username>/.config/m365-mail-mirror/config.yaml
+#      - Or specify with: m365-mail-mirror --config /path/to/config.yaml
+#   2. Uncomment and modify the settings you need
+#   3. At minimum, you MUST configure: clientId and outputPath
+#
+# CONFIGURATION PRECEDENCE (highest to lowest):
+#   1. Command-line flags (e.g., --batch-size 50)
+#   2. Environment variables (e.g., M365_MAIL_MIRROR_CLIENT_ID=xxx)
+#   3. This configuration file
+#
+# NOTE: Property names use camelCase (e.g., clientId, not client_id)
+#
+# =============================================================================
+
+
+# =============================================================================
+# REQUIRED: Azure AD App Registration
+# =============================================================================
+#
+# You must register an Azure AD application to use this tool.
+# See: https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app
+#
+# Required app settings:
+#   - Application type: Public client/native
+#   - API permissions: Mail.Read (Delegated)
+#   - Supported accounts: Any organizational directory and personal Microsoft accounts
+#
+# After registration, copy your Client ID from the app overview page.
+
+# Your Azure AD application (client) ID (REQUIRED)
+# Format: UUID/GUID (e.g., "12345678-1234-1234-1234-123456789012")
+clientId: "YOUR-CLIENT-ID-HERE"
+
+# Your Azure AD tenant ID (default: "common")
+# Options:
+#   - "common"           - Multi-tenant (works with any M365 account) [RECOMMENDED]
+#   - "organizations"    - Any work/school account
+#   - "consumers"        - Personal Microsoft accounts only
+#   - "your-tenant-id"   - Specific tenant UUID for single-tenant apps
+tenantId: "common"
+
+
+# =============================================================================
+# REQUIRED: Output Directory
+# =============================================================================
+#
+# The root directory where your email archive will be stored.
+# The tool will create this structure:
+#
+#   <outputPath>/
+#   ├── .sync.db          # SQLite database (sync state, metadata)
+#   ├── eml/              # Original messages (permanent archive)
+#   ├── html/             # Browsable HTML (optional, regenerable)
+#   ├── markdown/         # AI-friendly Markdown (optional, regenerable)
+#   ├── attachments/      # Extracted files (optional, regenerable)
+#   ├── _Quarantine/      # Deleted messages (moved here, never auto-deleted)
+#   └── _Errors/          # Malformed messages for debugging
+#
+# IMPORTANT: EML files are the canonical archive. HTML/Markdown/attachments
+# can be deleted and regenerated anytime with the `transform` command.
+
+# Path to your mail archive directory (REQUIRED)
+# Use absolute paths for clarity. The directory will be created if it doesn't exist.
+# Examples:
+#   Windows: "C:/Users/username/Documents/MailArchive"
+#   macOS:   "/Users/username/Documents/MailArchive"
+#   Linux:   "/home/username/mail-archive"
+outputPath: "/path/to/your/mail-archive"
+
+
+# =============================================================================
+# OPTIONAL: Mailbox Selection
+# =============================================================================
+#
+# By default, syncs the authenticated user's primary mailbox.
+# Set this to sync a different mailbox (requires delegated access).
+
+# Mailbox to sync (optional, defaults to authenticated user)
+# Use this for:
+#   - Shared mailboxes: "shared@company.com"
+#   - Delegated access: "colleague@company.com"
+# Leave commented to use the authenticated user's mailbox.
+# mailbox: "user@example.com"
+
+
+# =============================================================================
+# OPTIONAL: Sync Settings
+# =============================================================================
+#
+# These settings control how messages are downloaded from Microsoft 365.
+# Environment variable overrides:
+#   M365_MAIL_MIRROR_SYNC_BATCH_SIZE
+#   M365_MAIL_MIRROR_SYNC_PARALLEL
+#   M365_MAIL_MIRROR_SYNC_OVERLAP_MINUTES
+
+sync:
+  # Number of messages to download per batch (default: 100)
+  # Higher values = fewer API calls but more memory usage.
+  # Recommended range: 50-200
+  batchSize: 100
+
+  # Number of concurrent download threads (default: 5)
+  # Microsoft Graph API limits to ~4 concurrent connections per mailbox.
+  # Higher values may trigger rate limiting (HTTP 429).
+  # Recommended range: 3-10
+  parallel: 5
+
+  # Minutes to overlap when checking for new messages (default: 60)
+  # During incremental sync, re-checks messages from N minutes before last sync.
+  # This catches messages that arrived late or were delayed in delivery.
+  # Higher values = more thorough but slower incremental syncs.
+  overlapMinutes: 60
+
+  # Folders to exclude from sync (default: empty list)
+  # Use glob patterns to match folders:
+  #   - "Folder Name"           - Exact folder match
+  #   - "Parent/Child"          - Nested folder path
+  #   - "Archive/*"             - All immediate children of Archive
+  #   - "Archive/**"            - Archive and all descendants (recursive)
+  #   - "**/Old*"               - Any folder starting with "Old" at any level
+  # Note: Folder names are case-sensitive on some systems.
+  excludeFolders: []
+  # excludeFolders:
+  #   - "Junk Email"            # Microsoft 365 junk/spam folder
+  #   - "Deleted Items"         # Trash folder
+  #   - "Drafts"                # Unsent drafts
+  #   - "Outbox"                # Messages pending send
+  #   - "Sync Issues"           # Microsoft sync conflict folder
+  #   - "Sync Issues/**"        # Include subfolders too
+  #   - "RSS Subscriptions"     # RSS feeds (if enabled)
+  #   - "Conversation History"  # Teams/Skype chat history
+  #   - "Archive/Old Projects/**"  # Specific archive subfolder
+
+
+# =============================================================================
+# OPTIONAL: Transformation Settings
+# =============================================================================
+#
+# Transformations convert EML files to other formats.
+# All transformations are OPTIONAL and can be regenerated anytime.
+#
+# Key concepts:
+#   - EML files are downloaded once and never re-downloaded
+#   - HTML/Markdown/attachments are generated from EML files locally
+#   - You can change these settings and run `transform` to regenerate
+#   - Transformations work offline (no internet required)
+#
+# Environment variable overrides:
+#   M365_MAIL_MIRROR_TRANSFORM_GENERATE_HTML
+#   M365_MAIL_MIRROR_TRANSFORM_GENERATE_MARKDOWN
+#   M365_MAIL_MIRROR_TRANSFORM_EXTRACT_ATTACHMENTS
+
+transform:
+  # Generate browsable HTML pages (default: true)
+  # Creates HTML files with email headers, body, and attachment links.
+  # Great for browsing your archive in a web browser.
+  generateHtml: true
+
+  # Generate AI-friendly Markdown files (default: false)
+  # Creates Markdown with YAML frontmatter containing metadata.
+  # Optimized for LLMs, RAG systems, and text processing.
+  generateMarkdown: false
+
+  # Extract attachments to separate files (default: true)
+  # Saves attachments alongside EML files in dedicated folders.
+  # Makes it easy to find and access attached documents.
+  extractAttachments: true
+
+  # -----------------------------------------------------------------------------
+  # HTML-specific transformation settings
+  # -----------------------------------------------------------------------------
+  # These settings only apply when generateHtml is true.
+  # Change these settings and run `m365-mail-mirror transform --only html --force`
+  # to regenerate HTML files with new settings.
+  #
+  # Environment variable overrides:
+  #   M365_MAIL_MIRROR_TRANSFORM_HTML_INLINE_STYLES
+  #   M365_MAIL_MIRROR_TRANSFORM_HTML_STRIP_EXTERNAL_IMAGES
+  #   M365_MAIL_MIRROR_TRANSFORM_HTML_HIDE_CC
+  #   M365_MAIL_MIRROR_TRANSFORM_HTML_HIDE_BCC
+
+  html:
+    # Embed CSS styles in each HTML file (default: false)
+    # - false: Creates external style.css files (smaller HTML, easier theming)
+    # - true:  Embeds CSS in each file (larger files, but fully self-contained)
+    inlineStyles: false
+
+    # Remove external image references (default: false)
+    # - false: Keep external images (may not load offline, tracks when viewed)
+    # - true:  Strip external images (better privacy, works offline)
+    # Note: Inline/embedded images (data URIs) are always preserved.
+    stripExternalImages: false
+
+    # Hide CC recipients in HTML output (default: false)
+    # Useful for privacy when sharing archive with others.
+    hideCc: false
+
+    # Hide BCC recipients in HTML output (default: true)
+    # BCC is rarely stored in received messages anyway.
+    hideBcc: true
+
+
+# =============================================================================
+# OPTIONAL: Attachment Extraction Settings
+# =============================================================================
+#
+# These settings only apply when transform.extractAttachments is true.
+# Controls how attachments are extracted and organized.
+#
+# Environment variable overrides:
+#   M365_MAIL_MIRROR_ATTACHMENTS_SKIP_EXECUTABLES
+
+attachments:
+  # Skip extraction of executable files (default: true) [RECOMMENDED]
+  # For security, executable files are NOT extracted by default.
+  # Instead, a .skipped placeholder file is created with details.
+  #
+  # Blocked file types include:
+  #   Windows: .exe, .dll, .bat, .cmd, .msi, .scr, .com, .pif, .ps1, .vbs, .js, .wsf, .hta
+  #   Scripts: .sh, .bash, .zsh, .fish, .csh, .py, .rb, .pl, .php
+  #   Java:    .jar, .class, .war, .ear
+  #   macOS:   .app, .dmg, .pkg
+  #   Linux:   .deb, .rpm, .run, .bin, .AppImage
+  #   Mobile:  .apk (Android), .ipa (iOS)
+  #
+  # To access blocked attachments, open the original EML in an email client.
+  skipExecutables: true
+
+
+# =============================================================================
+# OPTIONAL: ZIP File Extraction Settings
+# =============================================================================
+#
+# Controls automatic extraction of ZIP file attachments.
+# When enabled, ZIP contents are extracted alongside the original ZIP file.
+#
+# Structure when extracted:
+#   attachments/Inbox/2024/01/Message_1030_attachments/
+#   ├── archive.zip              # Original ZIP (always preserved)
+#   └── archive.zip_extracted/   # Extracted contents
+#       ├── document.txt
+#       └── subfolder/
+#           └── image.png
+#
+# Security: ZIPs are scanned before extraction. Extraction is skipped if:
+#   - ZIP is encrypted/password-protected
+#   - ZIP contains absolute paths (e.g., /etc/passwd, C:\Windows)
+#   - ZIP contains path traversal (../)
+#   - ZIP contains executable files (if skipWithExecutables: true)
+#   - ZIP has too many/few files (outside minFiles/maxFiles range)
+#
+# Environment variable overrides:
+#   M365_MAIL_MIRROR_ZIP_ENABLED
+#   M365_MAIL_MIRROR_ZIP_MIN_FILES
+#   M365_MAIL_MIRROR_ZIP_MAX_FILES
+#   M365_MAIL_MIRROR_ZIP_SKIP_ENCRYPTED
+#   M365_MAIL_MIRROR_ZIP_SKIP_WITH_EXECUTABLES
+
+zipExtraction:
+  # Enable automatic ZIP extraction (default: true)
+  # Set to false to preserve ZIPs as single attachments without extracting.
+  enabled: true
+
+  # Minimum files required to extract (default: 1)
+  # ZIPs with fewer files are skipped (e.g., skip empty ZIPs).
+  minFiles: 1
+
+  # Maximum files allowed for extraction (default: 100)
+  # ZIPs with more files are skipped to prevent extraction bombs.
+  # Increase if you commonly receive large archives.
+  maxFiles: 100
+
+  # Skip password-protected ZIPs (default: true) [RECOMMENDED]
+  # Encrypted ZIPs cannot be extracted without a password anyway.
+  skipEncrypted: true
+
+  # Skip ZIPs containing any executable files (default: true) [RECOMMENDED]
+  # Even if executable extraction is blocked, this prevents extracting
+  # ZIPs that might contain malicious files.
+  skipWithExecutables: true
+
+
+# =============================================================================
+# EXAMPLE: Minimal Configuration (Copy This to Get Started)
+# =============================================================================
+#
+# The minimum configuration you need to get started:
+#
+# clientId: "12345678-1234-1234-1234-123456789012"
+# outputPath: "/Users/myname/mail-archive"
+#
+# Then run:
+#   m365-mail-mirror auth login
+#   m365-mail-mirror sync
+#
+# =============================================================================
+
+
+# =============================================================================
+# EXAMPLE: Full-Featured Archive
+# =============================================================================
+#
+# A comprehensive setup with HTML, Markdown, and attachment extraction:
+#
+# clientId: "12345678-1234-1234-1234-123456789012"
+# tenantId: "common"
+# outputPath: "/Users/myname/mail-archive"
+#
+# sync:
+#   excludeFolders:
+#     - "Junk Email"
+#     - "Deleted Items"
+#     - "Drafts"
+#
+# transform:
+#   generateHtml: true
+#   generateMarkdown: true
+#   extractAttachments: true
+#   html:
+#     inlineStyles: false
+#     stripExternalImages: true
+#
+# attachments:
+#   skipExecutables: true
+#
+# zipExtraction:
+#   enabled: true
+#   maxFiles: 100
+#   skipEncrypted: true
+#   skipWithExecutables: true
+#
+# =============================================================================
+
+
+# =============================================================================
+# EXAMPLE: Minimal EML-Only Backup
+# =============================================================================
+#
+# Just archive emails without any transformations (fastest, smallest):
+#
+# clientId: "12345678-1234-1234-1234-123456789012"
+# outputPath: "/backup/mail"
+#
+# transform:
+#   generateHtml: false
+#   generateMarkdown: false
+#   extractAttachments: false
+#
+# =============================================================================
+
+
+# =============================================================================
+# EXAMPLE: AI/LLM-Optimized Archive
+# =============================================================================
+#
+# Optimized for feeding to AI agents or RAG systems:
+#
+# clientId: "12345678-1234-1234-1234-123456789012"
+# outputPath: "/data/mail-for-ai"
+#
+# transform:
+#   generateHtml: false
+#   generateMarkdown: true       # Markdown is ideal for LLMs
+#   extractAttachments: true     # May want to process attachments too
+#
+# attachments:
+#   skipExecutables: true
+#
+# =============================================================================

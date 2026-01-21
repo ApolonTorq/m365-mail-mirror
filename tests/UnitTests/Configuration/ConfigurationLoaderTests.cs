@@ -1,4 +1,5 @@
 using M365MailMirror.Core.Configuration;
+using M365MailMirror.Core.Exceptions;
 
 namespace M365MailMirror.UnitTests.Configuration;
 
@@ -226,6 +227,46 @@ public class ConfigurationLoaderTests : IDisposable
         config.Sync.ExcludeFolders.Should().Contain("Deleted Items");
         config.Sync.ExcludeFolders.Should().Contain("Junk Email");
         config.Sync.ExcludeFolders.Should().Contain("Drafts");
+    }
+
+    [Fact]
+    public void GetWorkingDirectoryConfigFilePath_ReturnsConfigYamlInCurrentDirectory()
+    {
+        var configPath = ConfigurationLoader.GetWorkingDirectoryConfigFilePath();
+
+        configPath.Should().EndWith("config.yaml");
+        configPath.Should().StartWith(Directory.GetCurrentDirectory());
+    }
+
+    [Fact]
+    public void Load_WithNoPath_WorkingDirectoryAndDefaultAreDifferentPaths()
+    {
+        // Verify that the working directory and default paths are distinct
+        // so the precedence logic can work correctly
+        var workingDirPath = ConfigurationLoader.GetWorkingDirectoryConfigFilePath();
+        var defaultPath = ConfigurationLoader.GetDefaultConfigFilePath();
+
+        // These should be different paths (unless running from ~/.config/m365-mail-mirror)
+        workingDirPath.Should().NotBe(defaultPath);
+    }
+
+    [Fact]
+    public void Load_WithInvalidYaml_ThrowsConfigurationException()
+    {
+        var configPath = Path.Combine(_tempDir, "invalid.yaml");
+        var invalidYaml = """
+            clientId: "unclosed-quote
+            tenantId: test
+            """;
+        File.WriteAllText(configPath, invalidYaml);
+
+        var act = () => ConfigurationLoader.Load(configPath);
+
+        act.Should().Throw<ConfigurationException>()
+            .WithMessage("*Invalid YAML syntax*")
+            .Where(e => e.ConfigFilePath == configPath)
+            .Where(e => e.ExitCode == CliExitCodes.ConfigurationError)
+            .WithInnerException<YamlDotNet.Core.YamlException>();
     }
 
     private void SetEnvVar(string key, string value)

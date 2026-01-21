@@ -84,35 +84,35 @@ Create a configuration file at `~/.config/m365-mail-mirror/config.yaml`:
 
 ```yaml
 # Azure AD app registration
-client_id: "your-app-client-id-here"
-tenant_id: "common"  # or your specific tenant ID
+clientId: "your-app-client-id-here"
+tenantId: "common"  # or your specific tenant ID
 
 # Where to store the email archive
-output: "/path/to/mail/archive"
+outputPath: "/path/to/mail/archive"
 
 # Optional: Transformations (enable as needed)
-transformations:
-  generate_html: true          # Browsable HTML pages
-  generate_markdown: false     # AI-friendly Markdown
-  extract_attachments: false   # Separate attachment files
+transform:
+  generateHtml: true          # Browsable HTML pages
+  generateMarkdown: false     # AI-friendly Markdown
+  extractAttachments: false   # Separate attachment files
 
-# HTML-specific options (if generate_html: true)
-html:
-  inline_styles: false                 # Embed CSS in each HTML file vs external stylesheet
-  strip_external_images: false         # Remove external image references
-  hide_cc: false                       # Omit CC from email headers
-  hide_bcc: false                      # Omit BCC from email headers
+  # HTML-specific options (if generateHtml: true)
+  html:
+    inlineStyles: false                 # Embed CSS in each HTML file vs external stylesheet
+    stripExternalImages: false          # Remove external image references
+    hideCc: false                       # Omit CC from email headers
+    hideBcc: true                       # Omit BCC from email headers
 
-# Attachment extraction options (if extract_attachments: true)
-attachment_extraction:
-  skip_executables: true               # Don't extract .exe, .dll, .sh, etc.
+# Attachment extraction options (if extractAttachments: true)
+attachments:
+  skipExecutables: true               # Don't extract .exe, .dll, .sh, etc.
 
-zip_extraction:
+zipExtraction:
   enabled: true                        # Auto-extract ZIP file contents
-  min_files: 1                         # Skip empty ZIPs
-  max_files: 100                       # Skip huge archives
-  skip_encrypted: true                 # Skip password-protected ZIPs
-  skip_with_executables: true          # Skip ZIPs containing executables
+  minFiles: 1                          # Skip empty ZIPs
+  maxFiles: 100                        # Skip huge archives
+  skipEncrypted: true                  # Skip password-protected ZIPs
+  skipWithExecutables: true            # Skip ZIPs containing executables
 ```
 
 ### 3. Authenticate
@@ -138,7 +138,7 @@ m365-mail-mirror sync
 
 This will:
 
-1. Download all messages as EML files to `output/eml/`
+1. Download all messages as EML files to `<outputPath>/eml/`
 2. Organize by folder and date: `eml/{folder}/{YYYY}/{MM}/{message}.eml`
 3. Generate configured transformations (HTML, Markdown, attachments)
 4. Show progress and summary
@@ -316,58 +316,55 @@ Override with `--config <path>` flag.
 
 ```yaml
 # Azure AD app registration
-client_id: "12345678-1234-1234-1234-123456789012"
-tenant_id: "common"
+clientId: "12345678-1234-1234-1234-123456789012"
+tenantId: "common"
+
+# Where to store the email archive
+outputPath: "/Users/username/mail-archive"
+mailbox: "user@example.com"  # Optional: defaults to authenticated user
 
 # Sync settings
-output: "/Users/username/mail-archive"
-mailbox: "user@example.com"  # Optional: defaults to authenticated user
-batch_size: 100
-parallel: 5
-overlap_minutes: 60
-
-# Folder filtering (glob patterns)
-exclude:
-  - "Junk Email"
-  - "Deleted Items"
-  - "Archive/Old Projects/*"
-  - "RSS Subscriptions"
+sync:
+  batchSize: 100
+  parallel: 5
+  overlapMinutes: 60
+  # Folder filtering (glob patterns)
+  excludeFolders:
+    - "Junk Email"
+    - "Deleted Items"
+    - "Archive/Old Projects/*"
+    - "RSS Subscriptions"
 
 # Transformations
-transformations:
-  generate_html: true
-  generate_markdown: true
-  extract_attachments: true
+transform:
+  generateHtml: true
+  generateMarkdown: true
+  extractAttachments: true
 
-# HTML-specific options
-html:
-  inline_styles: false          # Use external stylesheet (recommended)
-  strip_external_images: false  # Keep external images (may not load offline)
-  hide_cc: false                # Show CC recipients
-  hide_bcc: false               # Show BCC recipients
-
-# Markdown-specific options (future)
-markdown:
-  include_headers: true
-  format_style: "gfm"  # GitHub-flavored Markdown
+  # HTML-specific options
+  html:
+    inlineStyles: false          # Use external stylesheet (recommended)
+    stripExternalImages: false   # Keep external images (may not load offline)
+    hideCc: false                # Show CC recipients
+    hideBcc: true                # Hide BCC recipients
 
 # Attachment extraction options
-attachment_extraction:
-  skip_executables: true        # Don't extract executable files (.exe, .dll, .sh, etc.)
+attachments:
+  skipExecutables: true        # Don't extract executable files (.exe, .dll, .sh, etc.)
 
 # ZIP file extraction
-zip_extraction:
+zipExtraction:
   enabled: true                 # Auto-extract ZIP contents
-  min_files: 1                  # Minimum files to extract (skip empty ZIPs)
-  max_files: 100                # Maximum files to extract (skip huge archives)
-  skip_encrypted: true          # Don't extract password-protected ZIPs
-  skip_with_executables: true   # Don't extract ZIPs containing executables
+  minFiles: 1                   # Minimum files to extract (skip empty ZIPs)
+  maxFiles: 100                 # Maximum files to extract (skip huge archives)
+  skipEncrypted: true           # Don't extract password-protected ZIPs
+  skipWithExecutables: true     # Don't extract ZIPs containing executables
 ```
 
 ### Configuration Precedence
 
 1. **Command-line flags** (highest priority)
-2. **Environment variables** (`M365_MIRROR_*` prefix)
+2. **Environment variables** (`M365_MAIL_MIRROR_*` prefix)
 3. **Configuration file** (lowest priority)
 
 Example:
@@ -377,9 +374,11 @@ Example:
 m365-mail-mirror sync --batch-size 50
 
 # Environment variable
-export M365_MIRROR_BATCH_SIZE=50
+export M365_MAIL_MIRROR_SYNC_BATCH_SIZE=50
 m365-mail-mirror sync
 ```
+
+See [config-example.yaml](config-example.yaml) for a fully documented configuration template with all available options.
 
 For detailed documentation, see:
 

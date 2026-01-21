@@ -1,0 +1,236 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CLI: sync",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["sync", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: sync (dry-run)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["sync", "-c", "./config.yaml", "--dry-run"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: sync (custom output)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["sync", "-c", "./config.yaml", "-o", "./archive"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: sync (with mailbox)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["sync", "-c", "./config.yaml", "--mailbox", "user@example.com"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: sync (custom batch/parallel)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["sync", "-c", "./config.yaml", "--batch-size", "50", "--parallel", "10"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform --force",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml", "--force"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform --only html",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml", "--only", "html"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform --only markdown",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml", "--only", "markdown"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform --only attachments",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml", "--only", "attachments"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: transform (dry-run)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["transform", "-c", "./config.yaml", "--dry-run"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: status",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["status", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: status --quarantine",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["status", "-c", "./config.yaml", "--quarantine"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: verify",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["verify", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: verify --fix",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["verify", "-c", "./config.yaml", "--fix"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: auth login",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["auth", "login", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: auth logout",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["auth", "logout", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: auth status",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["auth", "status", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: auth refresh",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["auth", "refresh", "-c", "./config.yaml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: --help",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["--help"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CLI: --version",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cli/bin/Debug/net10.0/m365-mail-mirror.dll",
+      "args": ["--version"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

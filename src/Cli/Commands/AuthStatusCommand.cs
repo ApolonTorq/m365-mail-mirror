@@ -1,4 +1,3 @@
-using CliFx;
 using CliFx.Attributes;
 using CliFx.Infrastructure;
 using M365MailMirror.Core.Configuration;
@@ -8,12 +7,12 @@ using M365MailMirror.Infrastructure.Authentication;
 namespace M365MailMirror.Cli.Commands;
 
 [Command("auth status", Description = "Show current authentication status")]
-public class AuthStatusCommand : ICommand
+public class AuthStatusCommand : BaseCommand
 {
     [CommandOption("config", 'c', Description = "Path to configuration file")]
     public string? ConfigPath { get; init; }
 
-    public async ValueTask ExecuteAsync(IConsole console)
+    protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
         var logger = LoggerFactory.CreateLogger<AuthStatusCommand>();
 
@@ -36,57 +35,41 @@ public class AuthStatusCommand : ICommand
         await console.Output.WriteLineAsync($"Tenant ID:    {config.TenantId}");
         await console.Output.WriteLineAsync();
 
-        try
+        var tokenCache = new FileTokenCacheStorage();
+        var authService = new MsalAuthenticationService(config.ClientId, config.TenantId, tokenCache, logger);
+        var status = await authService.GetStatusAsync();
+
+        await console.Output.WriteLineAsync($"Cache:        {status.CacheLocation}");
+        await console.Output.WriteLineAsync($"Has Cache:    {(status.HasCachedToken ? "Yes" : "No")}");
+        await console.Output.WriteLineAsync();
+
+        if (status.IsAuthenticated)
         {
-            var tokenCache = new FileTokenCacheStorage();
-            var authService = new MsalAuthenticationService(config.ClientId, config.TenantId, tokenCache, logger);
-            var status = await authService.GetStatusAsync();
+            await WriteSuccessAsync(console, "Status:       Authenticated");
+            await console.Output.WriteLineAsync($"Account:      {status.Account}");
 
-            await console.Output.WriteLineAsync($"Cache:        {status.CacheLocation}");
-            await console.Output.WriteLineAsync($"Has Cache:    {(status.HasCachedToken ? "Yes" : "No")}");
-            await console.Output.WriteLineAsync();
-
-            if (status.IsAuthenticated)
+            if (!string.IsNullOrEmpty(status.TenantId))
             {
-                console.ForegroundColor = ConsoleColor.Green;
-                await console.Output.WriteLineAsync($"Status:       Authenticated");
-                console.ResetColor();
-                await console.Output.WriteLineAsync($"Account:      {status.Account}");
-
-                if (!string.IsNullOrEmpty(status.TenantId))
-                {
-                    await console.Output.WriteLineAsync($"Tenant:       {status.TenantId}");
-                }
-            }
-            else if (status.HasCachedToken)
-            {
-                console.ForegroundColor = ConsoleColor.Yellow;
-                await console.Output.WriteLineAsync($"Status:       Token expired");
-                console.ResetColor();
-
-                if (!string.IsNullOrEmpty(status.Account))
-                {
-                    await console.Output.WriteLineAsync($"Account:      {status.Account}");
-                }
-
-                await console.Output.WriteLineAsync();
-                await console.Output.WriteLineAsync("Run 'auth login' to re-authenticate.");
-            }
-            else
-            {
-                console.ForegroundColor = ConsoleColor.Yellow;
-                await console.Output.WriteLineAsync($"Status:       Not authenticated");
-                console.ResetColor();
-                await console.Output.WriteLineAsync();
-                await console.Output.WriteLineAsync("Run 'auth login' to authenticate.");
+                await console.Output.WriteLineAsync($"Tenant:       {status.TenantId}");
             }
         }
-        catch (Exception ex)
+        else if (status.HasCachedToken)
         {
-            console.ForegroundColor = ConsoleColor.Red;
-            await console.Error.WriteLineAsync($"Error checking authentication status: {ex.Message}");
-            console.ResetColor();
-            logger.Error(ex, "Error checking authentication status");
+            await WriteWarningAsync(console, "Status:       Token expired");
+
+            if (!string.IsNullOrEmpty(status.Account))
+            {
+                await console.Output.WriteLineAsync($"Account:      {status.Account}");
+            }
+
+            await console.Output.WriteLineAsync();
+            await console.Output.WriteLineAsync("Run 'auth login' to re-authenticate.");
+        }
+        else
+        {
+            await WriteWarningAsync(console, "Status:       Not authenticated");
+            await console.Output.WriteLineAsync();
+            await console.Output.WriteLineAsync("Run 'auth login' to authenticate.");
         }
     }
 }

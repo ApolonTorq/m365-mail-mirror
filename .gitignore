@@ -419,3 +419,7 @@ FodyWeavers.xsd
 
 # Claude
 .claude/settings.local.json
+
+# Allows a local output and dev config file to live in the repo but be ignored by git
+.output/
+config.yaml

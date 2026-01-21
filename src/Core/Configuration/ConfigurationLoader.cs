@@ -1,3 +1,4 @@
+using M365MailMirror.Core.Exceptions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -38,7 +39,17 @@ public static class ConfigurationLoader
     }
 
     /// <summary>
+    /// Gets the configuration file path in the current working directory.
+    /// </summary>
+    public static string GetWorkingDirectoryConfigFilePath()
+    {
+        return Path.Combine(Directory.GetCurrentDirectory(), ConfigFileName);
+    }
+
+    /// <summary>
     /// Loads configuration from the specified file path, or from the default location if not specified.
+    /// When no path is specified, checks for config.yaml in the current working directory first,
+    /// then falls back to the user config directory (~/.config/m365-mail-mirror/config.yaml).
     /// Environment variables override file values.
     /// </summary>
     /// <param name="configPath">Optional path to configuration file.</param>
@@ -47,12 +58,36 @@ public static class ConfigurationLoader
     {
         var config = new AppConfiguration();
 
+        // Determine which file to load
+        string? filePath = configPath;
+
+        if (filePath == null)
+        {
+            // Check working directory first, then fall back to user config
+            var workingDirConfig = GetWorkingDirectoryConfigFilePath();
+            if (File.Exists(workingDirConfig))
+            {
+                filePath = workingDirConfig;
+            }
+            else
+            {
+                filePath = GetDefaultConfigFilePath();
+            }
+        }
+
         // Try to load from file
-        var filePath = configPath ?? GetDefaultConfigFilePath();
         if (File.Exists(filePath))
         {
-            var yaml = File.ReadAllText(filePath);
-            config = Deserializer.Deserialize<AppConfiguration>(yaml) ?? new AppConfiguration();
+            try
+            {
+                var yaml = File.ReadAllText(filePath);
+                config = Deserializer.Deserialize<AppConfiguration>(yaml) ?? new AppConfiguration();
+            }
+            catch (YamlDotNet.Core.YamlException ex)
+            {
+                throw new ConfigurationException(
+                    $"Invalid YAML syntax in configuration file: {ex.Message}", ex, filePath);
+            }
         }
 
         // Apply environment variable overrides

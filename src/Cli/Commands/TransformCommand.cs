@@ -1,7 +1,7 @@
-using CliFx;
 using CliFx.Attributes;
 using CliFx.Infrastructure;
 using M365MailMirror.Core.Configuration;
+using M365MailMirror.Core.Exceptions;
 using M365MailMirror.Core.Logging;
 using M365MailMirror.Core.Transform;
 using M365MailMirror.Infrastructure.Database;
@@ -11,7 +11,7 @@ using M365MailMirror.Infrastructure.Transform;
 namespace M365MailMirror.Cli.Commands;
 
 [Command("transform", Description = "Transform EML files to HTML, Markdown, and extract attachments")]
-public class TransformCommand : ICommand
+public class TransformCommand : BaseCommand
 {
     [CommandOption("config", 'c', Description = "Path to configuration file")]
     public string? ConfigPath { get; init; }
@@ -37,131 +37,99 @@ public class TransformCommand : ICommand
     [CommandOption("attachments", Description = "Enable attachment extraction")]
     public bool Attachments { get; init; } = true;
 
-    public async ValueTask ExecuteAsync(IConsole console)
+    protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
         var logger = LoggerFactory.CreateLogger<TransformCommand>();
         var cancellationToken = console.RegisterCancellationHandler();
 
-        try
+        // Load configuration
+        var config = ConfigurationLoader.Load(ConfigPath);
+        var archiveRoot = ArchivePath ?? config.OutputPath;
+
+        // Verify archive directory exists
+        if (!Directory.Exists(archiveRoot))
         {
-            // Load configuration
-            var config = ConfigurationLoader.Load(ConfigPath);
-            var archiveRoot = ArchivePath ?? config.OutputPath;
+            throw new M365MailMirrorException($"Archive directory does not exist: {archiveRoot}", CliExitCodes.FileSystemError);
+        }
 
-            // Verify archive directory exists
-            if (!Directory.Exists(archiveRoot))
+        // Check if database exists
+        var databasePath = Path.Combine(archiveRoot, StateDatabase.DefaultDatabaseFilename);
+        if (!File.Exists(databasePath))
+        {
+            throw new M365MailMirrorException($"No archive database found at: {databasePath}. Run 'sync' first to create the archive.", CliExitCodes.FileSystemError);
+        }
+
+        await console.Output.WriteLineAsync($"Archive: {archiveRoot}");
+        await console.Output.WriteLineAsync($"Parallel: {Parallel}");
+
+        if (!string.IsNullOrEmpty(Only))
+        {
+            await console.Output.WriteLineAsync($"Only: {Only}");
+        }
+
+        if (Force)
+        {
+            await WriteWarningAsync(console, "Force mode: regenerating all transformations");
+        }
+
+        await console.Output.WriteLineAsync();
+
+        // Create services
+        await using var database = new StateDatabase(databasePath, logger);
+        await database.InitializeAsync(cancellationToken);
+
+        var emlStorage = new EmlStorageService(archiveRoot, logger);
+        var transformService = new TransformationService(database, emlStorage, archiveRoot, config.ZipExtraction, logger);
+
+        // Build transform options
+        var options = new TransformOptions
+        {
+            Only = Only,
+            Force = Force,
+            MaxParallel = Parallel,
+            EnableHtml = Html,
+            EnableMarkdown = Markdown,
+            EnableAttachments = Attachments
+        };
+
+        // Execute transformation with progress reporting
+        await console.Output.WriteLineAsync("Starting transformation...");
+        await console.Output.WriteLineAsync();
+
+        var lastType = "";
+        var result = await transformService.TransformAsync(options, progress =>
+        {
+            if (progress.TransformationType != lastType)
             {
-                console.ForegroundColor = ConsoleColor.Red;
-                await console.Output.WriteLineAsync($"Archive directory does not exist: {archiveRoot}");
-                console.ResetColor();
-                return;
-            }
-
-            // Check if database exists
-            var databasePath = Path.Combine(archiveRoot, StateDatabase.DefaultDatabaseFilename);
-            if (!File.Exists(databasePath))
-            {
-                console.ForegroundColor = ConsoleColor.Red;
-                await console.Output.WriteLineAsync($"No archive database found at: {databasePath}");
-                await console.Output.WriteLineAsync("Run 'sync' first to create the archive.");
-                console.ResetColor();
-                return;
-            }
-
-            await console.Output.WriteLineAsync($"Archive: {archiveRoot}");
-            await console.Output.WriteLineAsync($"Parallel: {Parallel}");
-
-            if (!string.IsNullOrEmpty(Only))
-            {
-                await console.Output.WriteLineAsync($"Only: {Only}");
-            }
-
-            if (Force)
-            {
-                console.ForegroundColor = ConsoleColor.Yellow;
-                await console.Output.WriteLineAsync("Force mode: regenerating all transformations");
-                console.ResetColor();
-            }
-
-            await console.Output.WriteLineAsync();
-
-            // Create services
-            await using var database = new StateDatabase(databasePath, logger);
-            await database.InitializeAsync(cancellationToken);
-
-            var emlStorage = new EmlStorageService(archiveRoot, logger);
-            var transformService = new TransformationService(database, emlStorage, archiveRoot, config.ZipExtraction, logger);
-
-            // Build transform options
-            var options = new TransformOptions
-            {
-                Only = Only,
-                Force = Force,
-                MaxParallel = Parallel,
-                EnableHtml = Html,
-                EnableMarkdown = Markdown,
-                EnableAttachments = Attachments
-            };
-
-            // Execute transformation with progress reporting
-            await console.Output.WriteLineAsync("Starting transformation...");
-            await console.Output.WriteLineAsync();
-
-            var lastType = "";
-            var result = await transformService.TransformAsync(options, progress =>
-            {
-                if (progress.TransformationType != lastType)
+                lastType = progress.TransformationType ?? "";
+                if (!string.IsNullOrEmpty(lastType))
                 {
-                    lastType = progress.TransformationType ?? "";
-                    if (!string.IsNullOrEmpty(lastType))
-                    {
-                        console.Output.WriteLine($"[{progress.Phase}] {lastType}");
-                    }
+                    console.Output.WriteLine($"[{progress.Phase}] {lastType}");
                 }
-            }, cancellationToken);
-
-            // Display results
-            await console.Output.WriteLineAsync();
-
-            if (result.Success)
-            {
-                console.ForegroundColor = ConsoleColor.Green;
-                await console.Output.WriteLineAsync("Transformation completed successfully!");
-                console.ResetColor();
             }
-            else
-            {
-                console.ForegroundColor = ConsoleColor.Red;
-                await console.Output.WriteLineAsync($"Transformation failed: {result.ErrorMessage}");
-                console.ResetColor();
-            }
+        }, cancellationToken);
 
-            await console.Output.WriteLineAsync();
-            await console.Output.WriteLineAsync($"Messages transformed: {result.MessagesTransformed}");
-            await console.Output.WriteLineAsync($"Messages skipped:     {result.MessagesSkipped}");
+        // Display results
+        await console.Output.WriteLineAsync();
 
-            if (result.Errors > 0)
-            {
-                console.ForegroundColor = ConsoleColor.Yellow;
-                await console.Output.WriteLineAsync($"Errors:               {result.Errors}");
-                console.ResetColor();
-            }
-
-            await console.Output.WriteLineAsync($"Elapsed time:         {result.Elapsed:hh\\:mm\\:ss}");
-        }
-        catch (OperationCanceledException)
+        if (result.Success)
         {
-            console.ForegroundColor = ConsoleColor.Yellow;
-            await console.Output.WriteLineAsync();
-            await console.Output.WriteLineAsync("Transformation cancelled by user.");
-            console.ResetColor();
+            await WriteSuccessAsync(console, "Transformation completed successfully!");
         }
-        catch (Exception ex)
+        else
         {
-            console.ForegroundColor = ConsoleColor.Red;
-            await console.Error.WriteLineAsync($"Error: {ex.Message}");
-            console.ResetColor();
-            logger.Error(ex, "Transform failed: {0}", ex.Message);
+            await WriteErrorAsync(console, $"Transformation failed: {result.ErrorMessage}");
         }
+
+        await console.Output.WriteLineAsync();
+        await console.Output.WriteLineAsync($"Messages transformed: {result.MessagesTransformed}");
+        await console.Output.WriteLineAsync($"Messages skipped:     {result.MessagesSkipped}");
+
+        if (result.Errors > 0)
+        {
+            await WriteWarningAsync(console, $"Errors:               {result.Errors}");
+        }
+
+        await console.Output.WriteLineAsync($"Elapsed time:         {result.Elapsed:hh\\:mm\\:ss}");
     }
 }

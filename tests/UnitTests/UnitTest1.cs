@@ -1,3 +1,5 @@
+using M365MailMirror.Cli.Commands;
+
 namespace M365MailMirror.UnitTests;
 
 public class ProjectStructureTests
@@ -9,13 +11,13 @@ public class ProjectStructureTests
         // that we can reference types from all required projects
 
         // CLI commands exist
-        var syncCommandType = typeof(Cli.Commands.SyncCommand);
-        var transformCommandType = typeof(Cli.Commands.TransformCommand);
-        var statusCommandType = typeof(Cli.Commands.StatusCommand);
-        var verifyCommandType = typeof(Cli.Commands.VerifyCommand);
-        var authLoginCommandType = typeof(Cli.Commands.AuthLoginCommand);
-        var authLogoutCommandType = typeof(Cli.Commands.AuthLogoutCommand);
-        var authStatusCommandType = typeof(Cli.Commands.AuthStatusCommand);
+        var syncCommandType = typeof(SyncCommand);
+        var transformCommandType = typeof(TransformCommand);
+        var statusCommandType = typeof(StatusCommand);
+        var verifyCommandType = typeof(VerifyCommand);
+        var authLoginCommandType = typeof(AuthLoginCommand);
+        var authLogoutCommandType = typeof(AuthLogoutCommand);
+        var authStatusCommandType = typeof(AuthStatusCommand);
 
         // Verify types are loaded
         syncCommandType.Should().NotBeNull();
@@ -28,13 +30,13 @@ public class ProjectStructureTests
     }
 
     [Theory]
-    [InlineData(typeof(Cli.Commands.SyncCommand), "sync")]
-    [InlineData(typeof(Cli.Commands.TransformCommand), "transform")]
-    [InlineData(typeof(Cli.Commands.StatusCommand), "status")]
-    [InlineData(typeof(Cli.Commands.VerifyCommand), "verify")]
-    [InlineData(typeof(Cli.Commands.AuthLoginCommand), "auth login")]
-    [InlineData(typeof(Cli.Commands.AuthLogoutCommand), "auth logout")]
-    [InlineData(typeof(Cli.Commands.AuthStatusCommand), "auth status")]
+    [InlineData(typeof(SyncCommand), "sync")]
+    [InlineData(typeof(TransformCommand), "transform")]
+    [InlineData(typeof(StatusCommand), "status")]
+    [InlineData(typeof(VerifyCommand), "verify")]
+    [InlineData(typeof(AuthLoginCommand), "auth login")]
+    [InlineData(typeof(AuthLogoutCommand), "auth logout")]
+    [InlineData(typeof(AuthStatusCommand), "auth status")]
     public void Commands_HaveCorrectCommandAttribute(Type commandType, string expectedCommandName)
     {
         // Verify each command has the correct CliFx Command attribute

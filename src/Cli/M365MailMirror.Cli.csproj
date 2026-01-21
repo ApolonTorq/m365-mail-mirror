@@ -4,7 +4,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>m365-mail-mirror</AssemblyName>
     <RootNamespace>M365MailMirror.Cli</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>0.1.1</Version>
     <Description>Archive Microsoft 365 mailboxes to local storage with EML-first architecture</Description>
     <Authors>m365-mail-mirror contributors</Authors>
     <Copyright>Copyright (c) m365-mail-mirror contributors</Copyright>
@@ -21,8 +21,10 @@
     <PackageTags>email;microsoft365;outlook;archive;backup;eml;mime</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
-    <!-- Self-contained publish settings -->
-    <PublishSingleFile>true</PublishSingleFile>
+  </PropertyGroup>
+
+  <!-- Self-contained publish settings (only applies to 'dotnet publish', not 'dotnet build') -->
+  <PropertyGroup Condition="'$(PublishSingleFile)' == 'true' Or '$(PublishDir)' != ''">
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>

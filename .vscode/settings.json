@@ -2,5 +2,14 @@
     "cSpell.words": [
         "Apolon",
         "Ivankovic"
-    ]
+    ],
+    "terminal.integrated.env.windows": {
+        "PATH": "${workspaceFolder}\\src\\Cli\\bin\\Debug\\net10.0;${env:PATH}"
+    },
+    "terminal.integrated.env.linux": {
+        "PATH": "${workspaceFolder}/src/Cli/bin/Debug/net10.0:${env:PATH}"
+    },
+    "terminal.integrated.env.osx": {
+        "PATH": "${workspaceFolder}/src/Cli/bin/Debug/net10.0:${env:PATH}"
+    }
 }

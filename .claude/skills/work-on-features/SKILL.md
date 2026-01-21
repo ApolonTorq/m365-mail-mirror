@@ -1,16 +1,17 @@
 ---
 name: work-on-features
-description: Systematically implements incomplete features from WBS.md with testing
+description: Systematically implements incomplete features from CHANGELOG.md [Unreleased] section with testing
 ---
 
 # Work on Features
 
-You are the Work Features automation skill for the m365-mail-mirror project. Your mission is to systematically implement features from the Work Breakdown Structure (WBS.md) until all features are complete.
+You are the Work Features automation skill for the m365-mail-mirror project. Your mission is to systematically implement features from the Changelog [Unreleased] section (CHANGELOG.md) until all features are complete.
 
 ## Core Workflow
 
-1. **Analyze WBS Status**
-   - Read WBS.md to identify all incomplete features (unchecked `- [ ]` items)
+1. **Analyze Changelog Status**
+   - Read CHANGELOG.md and find the `## [Unreleased]` section
+   - Identify all incomplete features (unchecked `- [ ]` items) in the [Unreleased] section
    - Create a TodoWrite list with all incomplete features found
    - Identify the first incomplete feature to work on
    - Display the feature being worked on to the user
@@ -18,7 +19,7 @@ You are the Work Features automation skill for the m365-mail-mirror project. You
 2. **Understand Requirements**
    - Read CLAUDE.md for project overview and architecture principles
    - Read DESIGN.md for technical implementation patterns
-   - Read relevant ADRs (listed in WBS.md next to features) for decision context
+   - Read relevant ADRs (listed in CHANGELOG.md next to features) for decision context
    - Read existing source code to understand current patterns
    - Use the Explore agent (Task tool with subagent_type=Explore) if you need to understand codebase structure
 
@@ -55,13 +56,13 @@ You are the Work Features automation skill for the m365-mail-mirror project. You
 
 6. **Mark Feature as Complete**
    - Once all tests pass and implementation is verified:
-     - Read WBS.md
-     - Update the specific feature line from `- [ ]` to `- [x]`
-     - Write the updated WBS.md back
+     - Read CHANGELOG.md
+     - In the `## [Unreleased]` section, update the specific feature line from `- [ ]` to `- [x]`
+     - Write the updated CHANGELOG.md back
      - Confirm completion to the user with feature name
 
 7. **Continue to Next Feature**
-   - Re-read WBS.md to find next incomplete feature
+   - Re-read CHANGELOG.md [Unreleased] section to find next incomplete feature
    - Repeat steps 2-7 until all features are complete
    - If all features are complete, report success to user
 
@@ -76,17 +77,18 @@ You are the Work Features automation skill for the m365-mail-mirror project. You
 ## Resumption Behavior
 
 When the work-on-features skill is invoked:
-- ALWAYS start by reading WBS.md to check current status
+
+- ALWAYS start by reading CHANGELOG.md [Unreleased] section to check current status
 - If there are unchecked features, continue from the first unchecked item
 - If all features are checked, report completion and success
-- Use WBS.md as the single source of truth for progress
+- Use CHANGELOG.md [Unreleased] section as the single source of truth for progress
 
 ## Important Guidelines
 
 - **One feature at a time**: Focus completely on one feature before moving to next
 - **Tests are mandatory**: Never mark a feature complete without passing tests
 - **Follow project docs**: CLAUDE.md, DESIGN.md, and ADRs are your requirements
-- **WBS.md is source of truth**: Only mark items complete in WBS.md when fully done
+- **CHANGELOG.md is source of truth**: Only mark items complete in CHANGELOG.md [Unreleased] section when fully done
 - **Be thorough**: Each feature should be production-ready, not a stub
 - **Ask when uncertain**: Use AskUserQuestion for ambiguous requirements
 - **Show progress**: Keep TodoWrite updated so user sees progress
@@ -103,7 +105,7 @@ When the work-on-features skill is invoked:
 ## Example Workflow
 
 ```
-1. Read WBS.md → Find "OAuth device code flow implementation" unchecked
+1. Read CHANGELOG.md [Unreleased] section → Find "OAuth device code flow implementation" unchecked
 2. Create TodoWrite with sub-tasks:
    - Implement DeviceCodeAuthenticator class
    - Add token refresh logic
@@ -113,27 +115,29 @@ When the work-on-features skill is invoked:
 4. Write comprehensive unit tests
 5. Run: dotnet build && dotnet test
 6. Fix any failures, re-run tests
-7. All tests pass → Update WBS.md: `- [x] OAuth device code flow...`
+7. All tests pass → Update CHANGELOG.md [Unreleased]: `- [x] OAuth device code flow...`
 8. Move to next feature
 ```
 
 ## Output Format
 
 Always provide clear status updates:
-- "📋 Found X incomplete features in WBS.md"
+
+- "📋 Found X incomplete features in CHANGELOG.md [Unreleased]"
 - "🔨 Working on: [Feature Name]"
 - "✅ Tests passed for: [Feature Name]"
-- "✓ Marked complete in WBS.md: [Feature Name]"
+- "✓ Marked complete in CHANGELOG.md: [Feature Name]"
 - "➡️ Moving to next feature: [Feature Name]"
 - "🎉 All features complete!"
 
 ## Critical Success Criteria
 
 A feature is ONLY complete when:
+
 1. ✅ Implementation code is written and follows project patterns
 2. ✅ Unit tests are written and comprehensive
 3. ✅ `dotnet build` succeeds with no errors
 4. ✅ `dotnet test` succeeds with all tests passing
-5. ✅ WBS.md checkbox is marked as complete `- [x]`
+5. ✅ CHANGELOG.md [Unreleased] checkbox is marked as complete `- [x]`
 
-Now begin by reading WBS.md and starting work on the first incomplete feature.
+Now begin by reading CHANGELOG.md [Unreleased] section and starting work on the first incomplete feature.

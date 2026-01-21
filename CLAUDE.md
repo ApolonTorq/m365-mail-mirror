@@ -28,12 +28,12 @@ This file provides a concise overview of the project architecture and documentat
   - Testing architecture (three-tier strategy: unit, integration, E2E)
   - CI/CD integration (GitHub Actions for unit tests)
 
-- **[WBS.md](WBS.md)**: Work Breakdown Structure
-  - Implementation status tracking across versions
-  - Feature-oriented hierarchical breakdown
-  - Checkbox completion tracking (unchecked = not implemented, checked = complete with tests)
-  - Version-organized (currently v1.0)
-  - Guides implementation priorities and progress visibility
+- **[CHANGELOG.md](CHANGELOG.md)**: Changelog and Work Breakdown
+  - Follows Keep a Changelog format with Semantic Versioning
+  - **[Unreleased] section** = Current work breakdown (unchecked items are pending work)
+  - Released versions = Historical record of completed features
+  - Checkbox tracking: `[x]` = complete with tests, `[ ]` = planned/in-progress
+  - Guides implementation priorities and provides version history
 
 - **[decisions/](decisions/)**: Architecture Decision Records (ADRs)
   - Historical records of key architectural decisions
@@ -124,6 +124,7 @@ When working with this codebase:
 - **Read source code** for exact current behavior
 - **Do not treat ADRs as implementation specs** - they document decisions, not implementation
 - **When implementation details conflict**, trust: Source Code > DESIGN.md > ADRs (in that order)
+- **Keep CHANGELOG.md in sync**: When modifying functionality, update the `[Unreleased]` section simultaneously - add entries for new/changed features, remove entries when corresponding functionality is deleted
 
 ## Core Architecture Concepts
 
@@ -193,7 +194,7 @@ When implementing features, refer to:
 
 - **User documentation**: [README.md](README.md)
 - **Technical design**: [DESIGN.md](DESIGN.md)
-- **Work breakdown**: [WBS.md](WBS.md)
+- **Changelog / Work breakdown**: [CHANGELOG.md](CHANGELOG.md)
 - **Architecture decisions**: [decisions/](decisions/)
 - **Microsoft Graph API**: https://learn.microsoft.com/en-us/graph/
 - **MimeKit documentation**: https://mimekit.net/

@@ -1,14 +1,14 @@
-using CliFx;
 using CliFx.Attributes;
 using CliFx.Infrastructure;
 using M365MailMirror.Core.Configuration;
+using M365MailMirror.Core.Exceptions;
 using M365MailMirror.Core.Logging;
 using M365MailMirror.Infrastructure.Authentication;
 
 namespace M365MailMirror.Cli.Commands;
 
 [Command("auth login", Description = "Authenticate with Microsoft 365 using device code flow")]
-public class AuthLoginCommand : ICommand
+public class AuthLoginCommand : BaseCommand
 {
     [CommandOption("tenant", 't', Description = "Azure AD tenant ID (default: common)")]
     public string? TenantId { get; init; }
@@ -19,7 +19,7 @@ public class AuthLoginCommand : ICommand
     [CommandOption("config", 'c', Description = "Path to configuration file")]
     public string? ConfigPath { get; init; }
 
-    public async ValueTask ExecuteAsync(IConsole console)
+    protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
         var logger = LoggerFactory.CreateLogger<AuthLoginCommand>();
 
@@ -38,7 +38,7 @@ public class AuthLoginCommand : ICommand
             await console.Error.WriteLineAsync("  3. Click 'New registration'");
             await console.Error.WriteLineAsync("  4. Set redirect URI to 'http://localhost' (type: Public client/native)");
             await console.Error.WriteLineAsync("  5. Add 'Mail.ReadWrite' delegated permission under API permissions");
-            return;
+            throw new ConfigurationException("Client ID is required.");
         }
 
         await console.Output.WriteLineAsync("Starting device code authentication...");
@@ -60,18 +60,13 @@ public class AuthLoginCommand : ICommand
 
         if (result.IsSuccess)
         {
-            console.ForegroundColor = ConsoleColor.Green;
             await console.Output.WriteLineAsync();
-            await console.Output.WriteLineAsync($"Successfully authenticated as: {result.Account}");
+            await WriteSuccessAsync(console, $"Successfully authenticated as: {result.Account}");
             await console.Output.WriteLineAsync($"Token expires at: {result.ExpiresOn:yyyy-MM-dd HH:mm:ss}");
-            console.ResetColor();
         }
         else
         {
-            console.ForegroundColor = ConsoleColor.Red;
-            await console.Error.WriteLineAsync();
-            await console.Error.WriteLineAsync($"Authentication failed: {result.ErrorMessage}");
-            console.ResetColor();
+            throw new M365MailMirrorException($"Authentication failed: {result.ErrorMessage}", CliExitCodes.AuthenticationError);
         }
     }
 }

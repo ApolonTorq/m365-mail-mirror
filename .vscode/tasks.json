@@ -1,0 +1,219 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "build-release",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj",
+        "-c",
+        "Release",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "test",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "test",
+        "${workspaceFolder}",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "run: sync",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "sync", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: sync (dry-run)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "sync", "-c", "./config.yaml", "--dry-run"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: sync (custom output)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "sync", "-c", "./config.yaml", "-o", "./archive"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: sync (with mailbox)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "sync", "-c", "./config.yaml", "--mailbox", "user@example.com"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: sync (custom batch/parallel)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "sync", "-c", "./config.yaml", "--batch-size", "50", "--parallel", "10"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform --force",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml", "--force"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform --only html",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml", "--only", "html"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform --only markdown",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml", "--only", "markdown"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform --only attachments",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml", "--only", "attachments"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: transform (dry-run)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "transform", "-c", "./config.yaml", "--dry-run"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: status",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "status", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: status --quarantine",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "status", "-c", "./config.yaml", "--quarantine"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: verify",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "verify", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: verify --fix",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "verify", "-c", "./config.yaml", "--fix"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: auth login",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "auth", "login", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: auth logout",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "auth", "logout", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: auth status",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "auth", "status", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: auth refresh",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "auth", "refresh", "-c", "./config.yaml"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: --help",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "--help"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "run: --version",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/Cli/M365MailMirror.Cli.csproj", "--", "--version"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ]
+}
