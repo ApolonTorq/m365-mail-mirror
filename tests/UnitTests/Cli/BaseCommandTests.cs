@@ -122,7 +122,7 @@ public class BaseCommandTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CommandExceptionHasEmptyMessage_PreventsCliFxFromDuplicatingOutput()
+    public async Task ExecuteAsync_CommandExceptionHasInvisibleMessage_PreventsCliFxFromDuplicatingOutput()
     {
         // Arrange
         using var console = new FakeInMemoryConsole();
@@ -132,8 +132,9 @@ public class BaseCommandTests
         var exception = await Assert.ThrowsAsync<CommandException>(
             () => command.ExecuteAsync(console).AsTask());
 
-        // Assert - CommandException should have empty message so CliFx doesn't display anything
-        exception.Message.Should().BeEmpty();
+        // Assert - CommandException should have backspace char to trigger CliFx's "has custom message" path
+        // while remaining invisible to users. This prevents CliFx from displaying anything additional.
+        exception.Message.Should().Be("\b");
     }
 
     /// <summary>

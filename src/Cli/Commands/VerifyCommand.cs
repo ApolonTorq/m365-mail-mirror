@@ -25,6 +25,7 @@ public class VerifyCommand : BaseCommand
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
+        ConfigureLogging(console, Verbose);
         var logger = LoggerFactory.CreateLogger<VerifyCommand>();
         var cancellationToken = console.RegisterCancellationHandler();
 

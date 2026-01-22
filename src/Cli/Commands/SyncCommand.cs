@@ -4,11 +4,13 @@ using M365MailMirror.Core.Configuration;
 using M365MailMirror.Core.Exceptions;
 using M365MailMirror.Core.Logging;
 using M365MailMirror.Core.Sync;
+using M365MailMirror.Core.Transform;
 using M365MailMirror.Infrastructure.Authentication;
 using M365MailMirror.Infrastructure.Database;
 using M365MailMirror.Infrastructure.Graph;
 using M365MailMirror.Infrastructure.Storage;
 using M365MailMirror.Infrastructure.Sync;
+using M365MailMirror.Infrastructure.Transform;
 using Microsoft.Graph;
 
 namespace M365MailMirror.Cli.Commands;
@@ -22,8 +24,11 @@ public class SyncCommand : BaseCommand
     [CommandOption("output", 'o', Description = "Output directory for the mail archive")]
     public string? OutputPath { get; init; }
 
-    [CommandOption("batch-size", 'b', Description = "Number of messages to process per batch")]
-    public int BatchSize { get; init; } = 100;
+    [CommandOption("verbose", 'v', Description = "Show detailed debug logging")]
+    public bool Verbose { get; init; }
+
+    [CommandOption("checkpoint-interval", 'b', Description = "Number of messages between checkpoints (default: 10)")]
+    public int CheckpointInterval { get; init; } = 10;
 
     [CommandOption("parallel", 'p', Description = "Number of parallel downloads")]
     public int Parallel { get; init; } = 5;
@@ -51,6 +56,7 @@ public class SyncCommand : BaseCommand
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
+        ConfigureLogging(console, Verbose);
         var logger = LoggerFactory.CreateLogger<SyncCommand>();
         var cancellationToken = console.RegisterCancellationHandler();
 
@@ -59,7 +65,7 @@ public class SyncCommand : BaseCommand
 
         // Apply command-line overrides
         var outputPath = OutputPath ?? config.OutputPath;
-        var batchSize = BatchSize > 0 ? BatchSize : config.Sync.BatchSize;
+        var checkpointInterval = CheckpointInterval > 0 ? CheckpointInterval : config.Sync.CheckpointInterval;
         var parallel = Parallel > 0 ? Parallel : config.Sync.Parallel;
         var excludeFolders = ExcludeFolders.Count > 0 ? ExcludeFolders : config.Sync.ExcludeFolders;
         var mailbox = Mailbox ?? config.Mailbox;
@@ -81,7 +87,7 @@ public class SyncCommand : BaseCommand
         }
 
         await console.Output.WriteLineAsync($"Archive directory: {archiveRoot}");
-        await console.Output.WriteLineAsync($"Batch size: {batchSize}");
+        await console.Output.WriteLineAsync($"Checkpoint interval: {checkpointInterval}");
         await console.Output.WriteLineAsync($"Parallel downloads: {parallel}");
 
         if (excludeFolders.Count > 0)
@@ -97,20 +103,18 @@ public class SyncCommand : BaseCommand
         var tokenCache = new FileTokenCacheStorage();
         var authService = new MsalAuthenticationService(config.ClientId, config.TenantId, tokenCache, logger);
 
-        var authStatus = await authService.GetStatusAsync(cancellationToken);
-        if (!authStatus.IsAuthenticated)
-        {
-            throw new M365MailMirrorException("Not authenticated. Run 'auth login' first.", CliExitCodes.AuthenticationError);
-        }
-
-        // Acquire token silently for Graph API calls
+        // Acquire token silently - this validates auth and provides account info in one call
+        // (Previously called GetStatusAsync first, but that internally calls AcquireTokenSilent,
+        // causing redundant MSAL calls that can trigger AAD throttling)
         var tokenResult = await authService.AcquireTokenSilentAsync(cancellationToken);
         if (!tokenResult.IsSuccess)
         {
-            throw new M365MailMirrorException(tokenResult.ErrorMessage ?? "Failed to acquire token.", CliExitCodes.AuthenticationError);
+            throw new M365MailMirrorException(
+                tokenResult.ErrorMessage ?? "Not authenticated. Run 'auth login' first.",
+                CliExitCodes.AuthenticationError);
         }
 
-        await console.Output.WriteLineAsync($"Authenticated as: {authStatus.Account}");
+        await console.Output.WriteLineAsync($"Authenticated as: {tokenResult.Account}");
         await console.Output.WriteLineAsync();
 
         // Create Graph client using a token credential wrapper
@@ -126,13 +130,33 @@ public class SyncCommand : BaseCommand
         // Create EML storage
         var emlStorage = new EmlStorageService(archiveRoot, logger);
 
-        // Create sync engine
-        var syncEngine = new SyncEngine(graphMailClient, database, emlStorage, logger);
+        // Create transformation service only if any transformation flags are set
+        ITransformationService? transformationService = null;
+        if (GenerateHtml || GenerateMarkdown || ExtractAttachments)
+        {
+            transformationService = new TransformationService(
+                database,
+                emlStorage,
+                archiveRoot,
+                config.ZipExtraction,
+                logger);
+
+            // Log which transformations are enabled
+            var enabledTransforms = new List<string>();
+            if (GenerateHtml) enabledTransforms.Add("HTML");
+            if (GenerateMarkdown) enabledTransforms.Add("Markdown");
+            if (ExtractAttachments) enabledTransforms.Add("Attachments");
+            await console.Output.WriteLineAsync($"Inline transformations: {string.Join(", ", enabledTransforms)}");
+            await console.Output.WriteLineAsync();
+        }
+
+        // Create sync engine with optional transformation service
+        var syncEngine = new SyncEngine(graphMailClient, database, emlStorage, logger, transformationService);
 
         // Build sync options
         var syncOptions = new SyncOptions
         {
-            BatchSize = batchSize,
+            CheckpointInterval = checkpointInterval,
             MaxParallelDownloads = parallel,
             ExcludeFolders = excludeFolders.ToList(),
             DryRun = DryRun,
@@ -148,20 +172,55 @@ public class SyncCommand : BaseCommand
 
         var lastPhase = "";
         var lastFolder = "";
+        var lastReportedSynced = 0;
+        var lastReportedPage = 0;
 
         var result = await syncEngine.SyncAsync(syncOptions, progress =>
         {
-            // Update progress display
+            // Always show folder changes with summary info
             if (progress.Phase != lastPhase || progress.CurrentFolder != lastFolder)
             {
+                // Show completion summary for previous folder if we had progress
+                if (!string.IsNullOrEmpty(lastFolder) && lastPhase == "Downloading messages" && lastReportedSynced > 0)
+                {
+                    console.Output.WriteLine($"  Completed: {lastReportedSynced} messages synced");
+                }
+
                 lastPhase = progress.Phase;
                 lastFolder = progress.CurrentFolder ?? "";
+                lastReportedSynced = 0;
+                lastReportedPage = 0;
 
-                var folderInfo = !string.IsNullOrEmpty(progress.CurrentFolder)
-                    ? $" - {progress.CurrentFolder}"
+                // Build informative progress line
+                var folderProgress = progress.TotalFolders > 0
+                    ? $" ({progress.ProcessedFolders + 1}/{progress.TotalFolders})"
                     : "";
 
-                console.Output.WriteLine($"[{progress.Phase}]{folderInfo}");
+                var folderInfo = !string.IsNullOrEmpty(progress.CurrentFolder)
+                    ? $": {progress.CurrentFolder}{folderProgress}"
+                    : "";
+
+                var messageCount = progress.TotalMessagesInFolder > 0
+                    ? $" [{progress.TotalMessagesInFolder} messages]"
+                    : "";
+
+                console.Output.WriteLine($"[{progress.Phase}]{folderInfo}{messageCount}");
+            }
+
+            // Show periodic progress during downloading (every 10 messages or new page)
+            if (progress.Phase == "Downloading messages")
+            {
+                var shouldReport = progress.TotalMessagesSynced >= lastReportedSynced + 10 ||
+                                   (progress.CurrentPage > lastReportedPage && progress.CurrentPage > 1);
+
+                if (shouldReport)
+                {
+                    lastReportedSynced = progress.TotalMessagesSynced;
+                    lastReportedPage = progress.CurrentPage;
+
+                    var pageInfo = progress.CurrentPage > 0 ? $"page {progress.CurrentPage}, " : "";
+                    console.Output.WriteLine($"  Progress: {pageInfo}{progress.TotalMessagesSynced} synced, {progress.ProcessedMessagesInFolder}/{progress.TotalMessagesInFolder} in folder");
+                }
             }
         }, cancellationToken);
 

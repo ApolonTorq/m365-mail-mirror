@@ -143,7 +143,7 @@ This will:
 3. Generate configured transformations (HTML, Markdown, attachments)
 4. Show progress and summary
 
-**First sync may take hours for large mailboxes.** The sync is batched and resumable if interrupted.
+**First sync may take hours for large mailboxes.** Progress is visible immediately as messages download, and sync is resumable if interrupted.
 
 ### 5. Browse Your Archive
 
@@ -195,23 +195,22 @@ m365-mail-mirror sync --dry-run
 # Sync specific mailbox (if you have delegated access)
 m365-mail-mirror sync --mailbox shared@example.com
 
-# Customize batch size and parallelism
-m365-mail-mirror sync --batch-size 50 --parallel 10
+# Customize checkpoint interval and parallelism
+m365-mail-mirror sync --checkpoint-interval 20 --parallel 10
 ```
 
 **How it works**:
 
-- **Initial sync**: Downloads all messages in batches (default 100 per batch)
-- **Incremental sync**: Only downloads messages newer than last sync (with configurable overlap)
-- **Resumable**: If interrupted, resumes from last completed batch
-- **Checkpointed**: Progress saved after each batch
+- **Streaming sync**: Downloads messages as they're discovered from Microsoft 365 (no upfront enumeration delay)
+- **Incremental sync**: Only downloads messages newer than last sync (using delta queries)
+- **Resumable**: If interrupted, resumes from exact message position
+- **Immediate progress**: EML files appear on disk as messages download
 
 **Options**:
 
-- `--batch-size <n>`: Messages per batch (default: 100)
+- `--checkpoint-interval <n>`: Messages between checkpoints (default: 10)
 - `--parallel <n>`: Concurrent downloads (default: 5)
 - `--exclude <pattern>`: Skip folders matching glob pattern (can specify multiple)
-- `--overlap <minutes>`: Re-check messages from N minutes before last sync (default: 60)
 - `--dry-run`: Show what would be synced without downloading
 
 ### `transform` - Regenerate Outputs from EML Files
@@ -325,7 +324,7 @@ mailbox: "user@example.com"  # Optional: defaults to authenticated user
 
 # Sync settings
 sync:
-  batchSize: 100
+  checkpointInterval: 10   # Messages between checkpoints (for resumption)
   parallel: 5
   overlapMinutes: 60
   # Folder filtering (glob patterns)
@@ -371,10 +370,10 @@ Example:
 
 ```bash
 # Command-line flag overrides config file
-m365-mail-mirror sync --batch-size 50
+m365-mail-mirror sync --checkpoint-interval 20
 
 # Environment variable
-export M365_MAIL_MIRROR_SYNC_BATCH_SIZE=50
+export M365_MAIL_MIRROR_SYNC_CHECKPOINT_INTERVAL=20
 m365-mail-mirror sync
 ```
 

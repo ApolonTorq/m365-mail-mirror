@@ -90,7 +90,7 @@ public class SyncEngineTests
 
         SetupMimeDownloadMock();
 
-        var options = new SyncOptions { BatchSize = 100 };
+        var options = new SyncOptions { CheckpointInterval = 100 };
 
         // Act
         var result = await _syncEngine.SyncAsync(options);
@@ -208,10 +208,10 @@ public class SyncEngineTests
 
     #endregion
 
-    #region Batch Processing Tests
+    #region Streaming Checkpoint Tests
 
     [Fact]
-    public async Task SyncAsync_LargeFolderWithBatching_ProcessesInBatches()
+    public async Task SyncAsync_LargeFolderWithCheckpointing_CheckpointsAtIntervals()
     {
         // Arrange
         SetupBasicMocks();
@@ -240,8 +240,8 @@ public class SyncEngineTests
 
         SetupMimeDownloadMock();
 
-        // Use batch size of 2, so 5 messages = 3 batches
-        var options = new SyncOptions { BatchSize = 2 };
+        // Use checkpoint interval of 2 to test frequent checkpointing
+        var options = new SyncOptions { CheckpointInterval = 2 };
 
         // Act
         var result = await _syncEngine.SyncAsync(options);
@@ -250,10 +250,16 @@ public class SyncEngineTests
         result.Success.Should().BeTrue();
         result.MessagesSynced.Should().Be(5);
 
-        // Verify checkpointing happened (sync state updated for each batch)
+        // Verify streaming checkpoints happened via UpsertFolderSyncProgressAsync
+        // With 5 messages and checkpoint interval of 2, checkpoints occur at messages 2, 4, and 5
         _mockDatabase.Verify(
-            x => x.UpsertSyncStateAsync(It.IsAny<SyncState>(), It.IsAny<CancellationToken>()),
+            x => x.UpsertFolderSyncProgressAsync(It.IsAny<FolderSyncProgress>(), It.IsAny<CancellationToken>()),
             Times.AtLeast(3));
+
+        // Verify folder sync progress was cleaned up after completion
+        _mockDatabase.Verify(
+            x => x.DeleteFolderSyncProgressAsync("folder-1", It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

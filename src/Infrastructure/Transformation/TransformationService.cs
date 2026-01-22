@@ -58,8 +58,6 @@ public class TransformationService : ITransformationService
 
         try
         {
-            _logger.Info("Starting transformation (force: {0}, only: {1})", options.Force, options.Only ?? "all");
-
             // Determine which transformation types to run
             var transformTypes = GetTransformationTypes(options);
 
@@ -97,7 +95,7 @@ public class TransformationService : ITransformationService
                         cancellationToken);
                 }
 
-                _logger.Info("{0}: {1} messages to process", transformType, messages.Count);
+                _logger.Debug("{0}: {1} messages to process", transformType, messages.Count);
 
                 if (messages.Count == 0)
                 {
@@ -150,15 +148,9 @@ public class TransformationService : ITransformationService
                             break;
                     }
                 }
-
-                _logger.Info("{0} completed: {1} transformed, {2} skipped, {3} errors",
-                    transformType, transformed, skipped, errors);
             }
 
             stopwatch.Stop();
-            _logger.Info("Transformation completed: {0} transformed, {1} skipped, {2} errors, elapsed: {3}",
-                transformed, skipped, errors, stopwatch.Elapsed);
-
             return TransformResult.Successful(transformed, skipped, errors, stopwatch.Elapsed);
         }
         catch (OperationCanceledException)
@@ -582,6 +574,59 @@ date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
             filename = filename.Replace(c, '_');
         }
         return filename;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TransformSingleMessageAsync(
+        Message message,
+        InlineTransformOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        if (!options.HasAnyTransformation)
+            return true;
+
+        var success = true;
+
+        try
+        {
+            if (options.GenerateHtml)
+            {
+                var result = await TransformMessageAsync(message, "html", cancellationToken);
+                if (result == TransformMessageResult.Error)
+                {
+                    success = false;
+                    _logger.Warning("HTML transformation failed for message {0}", message.GraphId);
+                }
+            }
+
+            if (options.GenerateMarkdown)
+            {
+                var result = await TransformMessageAsync(message, "markdown", cancellationToken);
+                if (result == TransformMessageResult.Error)
+                {
+                    success = false;
+                    _logger.Warning("Markdown transformation failed for message {0}", message.GraphId);
+                }
+            }
+
+            if (options.ExtractAttachments)
+            {
+                var result = await TransformMessageAsync(message, "attachments", cancellationToken);
+                if (result == TransformMessageResult.Error)
+                {
+                    success = false;
+                    _logger.Warning("Attachment extraction failed for message {0}", message.GraphId);
+                }
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error during inline transformation of message {0}: {1}",
+                message.GraphId, ex.Message);
+            return false;
+        }
     }
 
     private enum TransformMessageResult

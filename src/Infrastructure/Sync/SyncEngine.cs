@@ -5,12 +5,13 @@ using M365MailMirror.Core.Graph;
 using M365MailMirror.Core.Logging;
 using M365MailMirror.Core.Storage;
 using M365MailMirror.Core.Sync;
+using M365MailMirror.Core.Transform;
 
 namespace M365MailMirror.Infrastructure.Sync;
 
 /// <summary>
 /// Sync engine for downloading and archiving messages from Microsoft 365.
-/// Implements batch processing with checkpointing for reliable resumption.
+/// Implements streaming sync with per-message checkpointing for reliable resumption.
 /// </summary>
 public class SyncEngine : ISyncEngine
 {
@@ -18,6 +19,7 @@ public class SyncEngine : ISyncEngine
     private readonly IStateDatabase _database;
     private readonly IEmlStorageService _emlStorage;
     private readonly IAppLogger _logger;
+    private readonly ITransformationService? _transformationService;
 
     /// <summary>
     /// Default overlap period in minutes for date-based fallback queries.
@@ -28,16 +30,23 @@ public class SyncEngine : ISyncEngine
     /// <summary>
     /// Creates a new SyncEngine instance.
     /// </summary>
+    /// <param name="graphClient">The Graph API client for interacting with Microsoft 365.</param>
+    /// <param name="database">The state database for tracking sync progress.</param>
+    /// <param name="emlStorage">The EML storage service for saving messages.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <param name="transformationService">Optional transformation service for inline transformation during sync.</param>
     public SyncEngine(
         IGraphMailClient graphClient,
         IStateDatabase database,
         IEmlStorageService emlStorage,
-        IAppLogger? logger = null)
+        IAppLogger? logger = null,
+        ITransformationService? transformationService = null)
     {
         _graphClient = graphClient ?? throw new ArgumentNullException(nameof(graphClient));
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _emlStorage = emlStorage ?? throw new ArgumentNullException(nameof(emlStorage));
         _logger = logger ?? LoggerFactory.CreateLogger<SyncEngine>();
+        _transformationService = transformationService;
     }
 
     /// <inheritdoc />
@@ -54,7 +63,11 @@ public class SyncEngine : ISyncEngine
 
         try
         {
-            _logger.Info("Starting sync operation (dryRun: {0}, batchSize: {1})", options.DryRun, options.BatchSize);
+            _logger.Info("Starting sync (dryRun: {0}, parallel: {1}, checkpoint: {2})",
+                options.DryRun, options.MaxParallelDownloads, options.CheckpointInterval);
+
+            // Clean up any orphaned temp files from previous interrupted syncs
+            _emlStorage.CleanupOrphanedTempFiles(TimeSpan.FromHours(1));
 
             // Phase 1: Get mailbox identifier
             var mailbox = options.Mailbox ?? await _graphClient.GetUserEmailAsync(cancellationToken);
@@ -62,7 +75,6 @@ public class SyncEngine : ISyncEngine
 
             // Phase 2: Get or create sync state
             var syncState = await GetOrCreateSyncStateAsync(mailbox, options.DryRun, cancellationToken);
-            _logger.Debug("Starting from batch {0}", syncState.LastBatchId);
 
             // Phase 3: Enumerate folders
             progressCallback?.Invoke(new SyncProgress
@@ -74,7 +86,7 @@ public class SyncEngine : ISyncEngine
             var folders = await _graphClient.GetFoldersAsync(options.Mailbox, cancellationToken);
             var filteredFolders = FilterFolders(folders, options.ExcludeFolders);
 
-            _logger.Info("Found {0} folders to sync (excluding {1})", filteredFolders.Count, folders.Count - filteredFolders.Count);
+            _logger.Info("Found {0} folders to sync (excluded {1})", filteredFolders.Count, folders.Count - filteredFolders.Count);
 
             // Phase 4: Store folder mappings
             if (!options.DryRun)
@@ -82,7 +94,7 @@ public class SyncEngine : ISyncEngine
                 await StoreFolderMappingsAsync(filteredFolders, cancellationToken);
             }
 
-            // Phase 5: Process each folder
+            // Phase 5: Process each folder with streaming
             var totalFolders = filteredFolders.Count;
             foreach (var folder in filteredFolders)
             {
@@ -100,10 +112,9 @@ public class SyncEngine : ISyncEngine
 
                 _logger.Info("Processing folder: {0} ({1} messages)", folder.FullPath, folder.TotalItemCount);
 
-                var (synced, skipped, folderErrors) = await ProcessFolderAsync(
+                var (synced, skipped, folderErrors) = await ProcessFolderStreamingAsync(
                     folder,
                     mailbox,
-                    syncState,
                     options,
                     progressCallback,
                     cancellationToken);
@@ -126,9 +137,6 @@ public class SyncEngine : ISyncEngine
             }
 
             stopwatch.Stop();
-            _logger.Info("Sync completed: {0} messages synced, {1} skipped, {2} folders, {3} errors, elapsed: {4}",
-                messagesSynced, messagesSkipped, foldersProcessed, errors, stopwatch.Elapsed);
-
             return SyncResult.Successful(messagesSynced, messagesSkipped, foldersProcessed, errors, stopwatch.Elapsed, options.DryRun);
         }
         catch (OperationCanceledException)
@@ -187,12 +195,25 @@ public class SyncEngine : ISyncEngine
 
     private async Task StoreFolderMappingsAsync(List<AppMailFolder> folders, CancellationToken cancellationToken)
     {
-        foreach (var folder in folders)
+        // Build set of folder IDs in our list to validate parent references
+        var folderIds = new HashSet<string>(folders.Select(f => f.Id));
+
+        // Sort folders so parents are inserted before children to satisfy foreign key constraints.
+        var sortedFolders = TopologicalSortFolders(folders);
+
+        foreach (var folder in sortedFolders)
         {
+            // If the parent folder isn't in our list, set ParentFolderId to null
+            var parentFolderId = folder.ParentFolderId;
+            if (!string.IsNullOrEmpty(parentFolderId) && !folderIds.Contains(parentFolderId))
+            {
+                parentFolderId = null;
+            }
+
             var folderEntity = new Folder
             {
                 GraphId = folder.Id,
-                ParentFolderId = folder.ParentFolderId,
+                ParentFolderId = parentFolderId,
                 LocalPath = folder.FullPath,
                 DisplayName = folder.DisplayName,
                 TotalItemCount = folder.TotalItemCount,
@@ -205,10 +226,50 @@ public class SyncEngine : ISyncEngine
         }
     }
 
-    private async Task<(int synced, int skipped, int errors)> ProcessFolderAsync(
+    private static List<AppMailFolder> TopologicalSortFolders(List<AppMailFolder> folders)
+    {
+        var folderIds = new HashSet<string>(folders.Select(f => f.Id));
+        var result = new List<AppMailFolder>(folders.Count);
+        var processed = new HashSet<string>();
+        var remaining = new Queue<AppMailFolder>(folders);
+        var iterationCount = 0;
+        var maxIterations = folders.Count * folders.Count;
+
+        while (remaining.Count > 0 && iterationCount < maxIterations)
+        {
+            iterationCount++;
+            var folder = remaining.Dequeue();
+
+            var parentId = folder.ParentFolderId;
+            var canProcess = string.IsNullOrEmpty(parentId) ||
+                             !folderIds.Contains(parentId) ||
+                             processed.Contains(parentId);
+
+            if (canProcess)
+            {
+                result.Add(folder);
+                processed.Add(folder.Id);
+            }
+            else
+            {
+                remaining.Enqueue(folder);
+            }
+        }
+
+        while (remaining.Count > 0)
+        {
+            result.Add(remaining.Dequeue());
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Processes a folder using streaming sync - downloads messages as each delta page arrives.
+    /// </summary>
+    private async Task<(int synced, int skipped, int errors)> ProcessFolderStreamingAsync(
         AppMailFolder folder,
         string mailbox,
-        SyncState syncState,
         SyncOptions options,
         SyncProgressCallback? progressCallback,
         CancellationToken cancellationToken)
@@ -216,61 +277,151 @@ public class SyncEngine : ISyncEngine
         var synced = 0;
         var skipped = 0;
         var errors = 0;
-        var batchId = 0;
-        var processedInFolder = 0;
 
-        // Load stored folder state for incremental sync
+        // Check for existing progress (resume support)
+        var progress = await _database.GetFolderSyncProgressAsync(folder.Id, cancellationToken);
         var storedFolder = await _database.GetFolderAsync(folder.Id, cancellationToken);
-        var storedDeltaToken = storedFolder?.DeltaToken;
+
+        // Fallback: If folder not found by graph_id, try by local_path
+        // This handles migration from mutable to immutable folder IDs
+        if (storedFolder == null)
+        {
+            storedFolder = await _database.GetFolderByPathAsync(folder.FullPath, cancellationToken);
+            if (storedFolder != null)
+            {
+                _logger.Debug("Folder {0}: found by path (ID changed from {1} to {2})",
+                    folder.FullPath, storedFolder.GraphId, folder.Id);
+            }
+        }
+
+        // Determine starting token: pending progress > stored delta token > null (initial)
+        string? currentToken = progress?.PendingNextLink ?? storedFolder?.DeltaToken;
+
+        _logger.Debug("Folder {0}: stored={1}, hasDeltaToken={2}, usingToken={3}",
+            folder.FullPath,
+            storedFolder != null,
+            storedFolder?.DeltaToken != null,
+            currentToken != null ? "yes (incremental)" : "no (full sync)");
+        var startPageNumber = progress?.PendingPageNumber ?? 0;
+        var startMessageIndex = progress?.PendingMessageIndex ?? 0;
         var storedLastSyncTime = storedFolder?.LastSyncTime;
 
+        // Initialize progress tracking if not resuming
+        if (progress == null && !options.DryRun)
+        {
+            progress = new FolderSyncProgress
+            {
+                FolderId = folder.Id,
+                SyncStartedAt = DateTimeOffset.UtcNow,
+                MessagesProcessed = 0
+            };
+            await _database.UpsertFolderSyncProgressAsync(progress, cancellationToken);
+        }
+
         string? finalDeltaToken = null;
+        var pageNumber = startPageNumber;
         var usedDateFallback = false;
 
         try
         {
-            // Try delta query first (with stored token for incremental sync)
-            var (newMessages, movedMessages, deletedMessages, newDeltaToken) = await GetMessagesWithDeltaAsync(
-                folder,
-                storedDeltaToken,
-                options,
-                cancellationToken);
-
-            finalDeltaToken = newDeltaToken;
-
-            // Process deleted messages first (quarantine them)
-            if (deletedMessages.Count > 0)
+            // Stream through delta pages, downloading messages as we go
+            while (true)
             {
-                _logger.Info("Processing {0} deleted messages from folder {1}", deletedMessages.Count, folder.FullPath);
-                var deletedErrors = await ProcessDeletedMessagesAsync(deletedMessages, options, cancellationToken);
-                errors += deletedErrors;
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Fetch one page from delta query
+                var result = await _graphClient.GetMessagesDeltaAsync(
+                    folder.Id,
+                    currentToken,
+                    options.Mailbox,
+                    cancellationToken);
+
+                pageNumber++;
+
+                _logger.Debug("Processing page {0} with {1} messages from folder {2}",
+                    pageNumber, result.Items.Count, folder.FullPath);
+
+                // Categorize messages in this page
+                var newMessages = new List<MessageInfo>();
+                var movedMessages = new List<MessageInfo>();
+                var deletedMessages = new List<MessageInfo>();
+
+                foreach (var message in result.Items)
+                {
+                    if (message.IsDeleted)
+                    {
+                        deletedMessages.Add(message);
+                    }
+                    else if (message.IsMoved)
+                    {
+                        movedMessages.Add(message);
+                    }
+                    else
+                    {
+                        newMessages.Add(message);
+                    }
+                }
+
+                // Process deletions and moves immediately (these don't checkpoint individually)
+                if (deletedMessages.Count > 0 && !options.DryRun)
+                {
+                    errors += await ProcessDeletedMessagesAsync(deletedMessages, options, cancellationToken);
+                }
+
+                if (movedMessages.Count > 0 && !options.DryRun)
+                {
+                    errors += await ProcessMovedMessagesAsync(movedMessages, options, cancellationToken);
+                }
+
+                // Process new messages with mini-batch checkpointing
+                var (pageSynced, pageSkipped, pageErrors) = await ProcessPageMessagesWithCheckpointingAsync(
+                    newMessages,
+                    folder,
+                    mailbox,
+                    progress,
+                    options,
+                    progressCallback,
+                    pageNumber,
+                    startMessageIndex,
+                    cancellationToken);
+
+                synced += pageSynced;
+                skipped += pageSkipped;
+                errors += pageErrors;
+
+                // Reset startMessageIndex after first page (only used for resume)
+                startMessageIndex = 0;
+
+                // Report progress
+                progressCallback?.Invoke(new SyncProgress
+                {
+                    Phase = "Downloading messages",
+                    CurrentFolder = folder.FullPath,
+                    TotalMessagesInFolder = folder.TotalItemCount,
+                    ProcessedMessagesInFolder = synced + skipped,
+                    TotalMessagesSynced = synced,
+                    CurrentPage = pageNumber,
+                    MessagesInCurrentPage = result.Items.Count
+                });
+
+                // Check if more pages
+                if (!result.HasMorePages)
+                {
+                    finalDeltaToken = result.DeltaToken;
+                    break;
+                }
+
+                // Store checkpoint with nextLink for next page
+                currentToken = result.NextPageLink;
+                if (!options.DryRun && progress != null)
+                {
+                    progress.PendingNextLink = currentToken;
+                    progress.PendingPageNumber = pageNumber;
+                    progress.PendingMessageIndex = 0;
+                    progress.LastCheckpointAt = DateTimeOffset.UtcNow;
+                    await _database.UpsertFolderSyncProgressAsync(progress, cancellationToken);
+                }
             }
-
-            // Process moved messages (relocate existing files)
-            if (movedMessages.Count > 0)
-            {
-                _logger.Info("Processing {0} moved messages from folder {1}", movedMessages.Count, folder.FullPath);
-                var movedErrors = await ProcessMovedMessagesAsync(movedMessages, options, cancellationToken);
-                errors += movedErrors;
-            }
-
-            // Process new/updated messages in sub-batches for checkpointing
-            var (s, sk, e, bid, proc) = await ProcessMessagesInBatchesAsync(
-                newMessages,
-                folder,
-                mailbox,
-                syncState,
-                options,
-                progressCallback,
-                batchId,
-                processedInFolder,
-                cancellationToken);
-
-            synced += s;
-            skipped += sk;
-            errors += e;
-            batchId = bid;
-            processedInFolder = proc;
         }
         catch (Exception ex) when (ShouldUseDateFallback(ex))
         {
@@ -282,7 +433,6 @@ public class SyncEngine : ISyncEngine
 
             if (storedLastSyncTime.HasValue)
             {
-                // Use date-based fallback with overlap
                 var sinceDate = storedLastSyncTime.Value.AddMinutes(-DefaultOverlapMinutes);
                 var dateMessages = await _graphClient.GetMessagesSinceDateAsync(
                     folder.Id,
@@ -290,85 +440,53 @@ public class SyncEngine : ISyncEngine
                     options.Mailbox,
                     cancellationToken);
 
-                _logger.Info("Date-based fallback returned {0} messages since {1}", dateMessages.Count, sinceDate);
+                _logger.Debug("Date-based fallback returned {0} messages since {1}", dateMessages.Count, sinceDate);
 
-                var (s, sk, e, bid, proc) = await ProcessMessagesInBatchesAsync(
+                var (s, sk, e) = await ProcessPageMessagesWithCheckpointingAsync(
                     dateMessages.ToList(),
                     folder,
                     mailbox,
-                    syncState,
+                    progress,
                     options,
                     progressCallback,
-                    batchId,
-                    processedInFolder,
+                    1,
+                    0,
                     cancellationToken);
 
                 synced += s;
                 skipped += sk;
                 errors += e;
-                batchId = bid;
-                processedInFolder = proc;
             }
             else
             {
                 // No previous sync time - need full resync without delta token
-                var (newMessages, movedMessages, deletedMessages, newDeltaToken) = await GetMessagesWithDeltaAsync(
-                    folder,
-                    null, // Force full sync
-                    options,
-                    cancellationToken);
+                // Recursively call with null token to start fresh
+                _logger.Debug("No previous sync time for folder {0}, starting full sync", folder.FullPath);
 
-                finalDeltaToken = newDeltaToken;
-
-                // Process deleted messages first (quarantine them)
-                if (deletedMessages.Count > 0)
+                // Clear any existing progress and retry
+                if (!options.DryRun)
                 {
-                    _logger.Info("Processing {0} deleted messages from folder {1}", deletedMessages.Count, folder.FullPath);
-                    var deletedErrors = await ProcessDeletedMessagesAsync(deletedMessages, options, cancellationToken);
-                    errors += deletedErrors;
+                    await _database.DeleteFolderSyncProgressAsync(folder.Id, cancellationToken);
                 }
 
-                // Process moved messages
-                if (movedMessages.Count > 0)
-                {
-                    _logger.Info("Processing {0} moved messages from folder {1}", movedMessages.Count, folder.FullPath);
-                    var movedErrors = await ProcessMovedMessagesAsync(movedMessages, options, cancellationToken);
-                    errors += movedErrors;
-                }
-
-                var (s, sk, e, bid, proc) = await ProcessMessagesInBatchesAsync(
-                    newMessages,
-                    folder,
-                    mailbox,
-                    syncState,
-                    options,
-                    progressCallback,
-                    batchId,
-                    processedInFolder,
-                    cancellationToken);
-
-                synced += s;
-                skipped += sk;
-                errors += e;
-                batchId = bid;
-                processedInFolder = proc;
+                return await ProcessFolderStreamingAsync(folder, mailbox, options, progressCallback, cancellationToken);
             }
         }
 
-        // Update folder's delta token and last sync time (if not dry run)
+        // Folder complete - update delta token and clear progress
         if (!options.DryRun)
         {
+            // Update folder's delta token
             var folderToUpdate = storedFolder ?? new Folder
             {
                 GraphId = folder.Id,
-                ParentFolderId = folder.ParentFolderId,
+                ParentFolderId = null,
                 LocalPath = folder.FullPath,
                 DisplayName = folder.DisplayName,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
             };
 
-            // Only update delta token if we used delta query (not date fallback)
             if (!usedDateFallback && finalDeltaToken != null)
             {
                 folderToUpdate.DeltaToken = finalDeltaToken;
@@ -380,67 +498,103 @@ public class SyncEngine : ISyncEngine
             folderToUpdate.UpdatedAt = DateTimeOffset.UtcNow;
 
             await _database.UpsertFolderAsync(folderToUpdate, cancellationToken);
+
+            // Clear progress (folder complete)
+            await _database.DeleteFolderSyncProgressAsync(folder.Id, cancellationToken);
         }
 
         return (synced, skipped, errors);
     }
 
-    private async Task<(List<MessageInfo> newMessages, List<MessageInfo> movedMessages, List<MessageInfo> deletedMessages, string? deltaToken)> GetMessagesWithDeltaAsync(
+    /// <summary>
+    /// Processes messages from a page with mini-batch checkpointing.
+    /// </summary>
+    private async Task<(int synced, int skipped, int errors)> ProcessPageMessagesWithCheckpointingAsync(
+        List<MessageInfo> messages,
         AppMailFolder folder,
-        string? storedDeltaToken,
+        string mailbox,
+        FolderSyncProgress? progress,
         SyncOptions options,
+        SyncProgressCallback? progressCallback,
+        int pageNumber,
+        int skipCount,
         CancellationToken cancellationToken)
     {
-        var newMessages = new List<MessageInfo>();
-        var movedMessages = new List<MessageInfo>();
-        var deletedMessages = new List<MessageInfo>();
-        string? deltaToken = storedDeltaToken;
-        string? finalDeltaToken = null;
+        var synced = 0;
+        var skipped = 0;
+        var errors = 0;
 
-        do
+        // Skip already-processed messages (for resume)
+        var messagesToProcess = messages.Skip(skipCount).ToList();
+
+        if (messagesToProcess.Count == 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            return (synced, skipped, errors);
+        }
 
-            var result = await _graphClient.GetMessagesDeltaAsync(
-                folder.Id,
-                deltaToken,
-                options.Mailbox,
-                cancellationToken);
+        // Process in mini-batches for checkpointing
+        var checkpointInterval = Math.Max(1, options.CheckpointInterval);
 
-            _logger.Debug("Received batch of {0} messages from folder {1}", result.Items.Count, folder.FullPath);
+        for (var i = 0; i < messagesToProcess.Count; i += checkpointInterval)
+        {
+            var miniBatch = messagesToProcess.Skip(i).Take(checkpointInterval).ToList();
 
-            foreach (var message in result.Items)
+            // Process mini-batch with parallelism
+            using var semaphore = new SemaphoreSlim(options.MaxParallelDownloads);
+            var tasks = miniBatch.Select(async message =>
             {
-                if (message.IsDeleted)
+                await semaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    // Message was deleted from Microsoft 365
-                    deletedMessages.Add(message);
+                    return await ProcessMessageAsync(message, folder, mailbox, options, cancellationToken);
                 }
-                else if (message.IsMoved)
+                finally
                 {
-                    // Message was moved out of this folder
-                    movedMessages.Add(message);
+                    semaphore.Release();
                 }
-                else
+            });
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results)
+            {
+                switch (result)
                 {
-                    // New or updated message
-                    newMessages.Add(message);
+                    case MessageProcessResult.Synced:
+                        synced++;
+                        break;
+                    case MessageProcessResult.Skipped:
+                        skipped++;
+                        break;
+                    case MessageProcessResult.Error:
+                        errors++;
+                        break;
                 }
             }
 
-            if (result.HasMorePages)
+            // Checkpoint after mini-batch
+            if (!options.DryRun && progress != null)
             {
-                deltaToken = result.NextPageLink;
-            }
-            else
-            {
-                finalDeltaToken = result.DeltaToken;
-                break;
+                progress.PendingMessageIndex = skipCount + i + miniBatch.Count;
+                progress.MessagesProcessed += miniBatch.Count;
+                progress.LastCheckpointAt = DateTimeOffset.UtcNow;
+                await _database.UpsertFolderSyncProgressAsync(progress, cancellationToken);
             }
 
-        } while (true);
+            // Report progress
+            progressCallback?.Invoke(new SyncProgress
+            {
+                Phase = "Downloading messages",
+                CurrentFolder = folder.FullPath,
+                TotalMessagesInFolder = folder.TotalItemCount,
+                ProcessedMessagesInFolder = synced + skipped,
+                TotalMessagesSynced = synced,
+                CurrentPage = pageNumber,
+                MessagesInCurrentPage = messages.Count
+            });
+        }
 
-        return (newMessages, movedMessages, deletedMessages, finalDeltaToken);
+        return (synced, skipped, errors);
     }
 
     private async Task<int> ProcessMovedMessagesAsync(
@@ -456,13 +610,11 @@ public class SyncEngine : ISyncEngine
 
             try
             {
-                // Look up the message in the database by immutable ID
                 var immutableId = messageInfo.ImmutableId ?? messageInfo.Id;
                 var existingMessage = await _database.GetMessageByImmutableIdAsync(immutableId, cancellationToken);
 
                 if (existingMessage == null)
                 {
-                    // Message doesn't exist in our database - nothing to move
                     _logger.Debug("Moved message {0} not found in database, skipping", immutableId);
                     continue;
                 }
@@ -473,11 +625,9 @@ public class SyncEngine : ISyncEngine
                     continue;
                 }
 
-                // Get the new folder path
                 var newFolder = await _database.GetFolderAsync(messageInfo.NewParentFolderId, cancellationToken);
                 if (newFolder == null)
                 {
-                    // New folder not yet in database - will be discovered when we sync that folder
                     _logger.Debug("New folder {0} not found in database for moved message {1}", messageInfo.NewParentFolderId, immutableId);
                     continue;
                 }
@@ -487,33 +637,30 @@ public class SyncEngine : ISyncEngine
 
                 if (string.Equals(newFolderPath, oldFolderPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Same folder - no move needed
                     continue;
                 }
 
                 if (options.DryRun)
                 {
-                    _logger.Info("Would move message {0} from {1} to {2}",
+                    _logger.Debug("Would move message {0} from {1} to {2}",
                         existingMessage.Subject ?? existingMessage.ImmutableId,
                         oldFolderPath,
                         newFolderPath);
                     continue;
                 }
 
-                // Move the EML file to the new folder
                 var newLocalPath = await _emlStorage.MoveEmlAsync(
                     existingMessage.LocalPath,
                     newFolderPath,
                     cancellationToken);
 
-                // Update the database
                 existingMessage.LocalPath = newLocalPath;
                 existingMessage.FolderPath = newFolderPath;
                 existingMessage.UpdatedAt = DateTimeOffset.UtcNow;
 
                 await _database.UpdateMessageAsync(existingMessage, cancellationToken);
 
-                _logger.Info("Moved message {0} from {1} to {2}",
+                _logger.Debug("Moved message {0} from {1} to {2}",
                     existingMessage.Subject ?? existingMessage.ImmutableId,
                     oldFolderPath,
                     newFolderPath);
@@ -541,11 +688,9 @@ public class SyncEngine : ISyncEngine
 
             try
             {
-                // Look up the message in the database by immutable ID or Graph ID
                 var immutableId = messageInfo.ImmutableId ?? messageInfo.Id;
                 var existingMessage = await _database.GetMessageByImmutableIdAsync(immutableId, cancellationToken);
 
-                // Also try by Graph ID if not found by immutable ID
                 if (existingMessage == null)
                 {
                     existingMessage = await _database.GetMessageAsync(messageInfo.Id, cancellationToken);
@@ -553,27 +698,24 @@ public class SyncEngine : ISyncEngine
 
                 if (existingMessage == null)
                 {
-                    // Message doesn't exist in our database - nothing to quarantine
                     _logger.Debug("Deleted message {0} not found in database, skipping", immutableId);
                     continue;
                 }
 
                 if (existingMessage.QuarantinedAt != null)
                 {
-                    // Already quarantined
                     _logger.Debug("Message {0} is already quarantined, skipping", immutableId);
                     continue;
                 }
 
                 if (options.DryRun)
                 {
-                    _logger.Info("Would quarantine message {0}: {1}",
+                    _logger.Debug("Would quarantine message {0}: {1}",
                         existingMessage.Subject ?? existingMessage.ImmutableId,
                         existingMessage.LocalPath);
                     continue;
                 }
 
-                // Move the EML file to quarantine
                 string newLocalPath;
                 try
                 {
@@ -583,12 +725,10 @@ public class SyncEngine : ISyncEngine
                 }
                 catch (FileNotFoundException)
                 {
-                    // File already gone - just update database
                     _logger.Warning("EML file not found for deleted message {0}, updating database only", immutableId);
-                    newLocalPath = existingMessage.LocalPath; // Keep original path in record
+                    newLocalPath = existingMessage.LocalPath;
                 }
 
-                // Update the database
                 existingMessage.LocalPath = newLocalPath;
                 existingMessage.QuarantinedAt = DateTimeOffset.UtcNow;
                 existingMessage.QuarantineReason = "deleted_in_m365";
@@ -596,7 +736,7 @@ public class SyncEngine : ISyncEngine
 
                 await _database.UpdateMessageAsync(existingMessage, cancellationToken);
 
-                _logger.Info("Quarantined deleted message {0}: {1}",
+                _logger.Debug("Quarantined deleted message {0}: {1}",
                     existingMessage.Subject ?? existingMessage.ImmutableId,
                     newLocalPath);
             }
@@ -610,119 +750,13 @@ public class SyncEngine : ISyncEngine
         return errors;
     }
 
-    private async Task<(int synced, int skipped, int errors, int batchId, int processed)> ProcessMessagesInBatchesAsync(
-        List<MessageInfo> messages,
-        AppMailFolder folder,
-        string mailbox,
-        SyncState syncState,
-        SyncOptions options,
-        SyncProgressCallback? progressCallback,
-        int startBatchId,
-        int startProcessed,
-        CancellationToken cancellationToken)
-    {
-        var synced = 0;
-        var skipped = 0;
-        var errors = 0;
-        var batchId = startBatchId;
-        var processedInFolder = startProcessed;
-
-        for (var i = 0; i < messages.Count; i += options.BatchSize)
-        {
-            var batch = messages.Skip(i).Take(options.BatchSize).ToList();
-            batchId++;
-
-            progressCallback?.Invoke(new SyncProgress
-            {
-                Phase = "Downloading messages",
-                CurrentFolder = folder.FullPath,
-                TotalMessagesInFolder = folder.TotalItemCount,
-                ProcessedMessagesInFolder = processedInFolder,
-                TotalMessagesSynced = synced + skipped,
-                CurrentBatch = batchId
-            });
-
-            var (batchSynced, batchSkipped, batchErrors) = await ProcessBatchAsync(
-                batch,
-                folder,
-                mailbox,
-                options,
-                cancellationToken);
-
-            synced += batchSynced;
-            skipped += batchSkipped;
-            errors += batchErrors;
-            processedInFolder += batch.Count;
-
-            // Checkpoint after each batch (update sync state)
-            if (!options.DryRun)
-            {
-                syncState.LastBatchId = batchId;
-                syncState.UpdatedAt = DateTimeOffset.UtcNow;
-                await _database.UpsertSyncStateAsync(syncState, cancellationToken);
-                _logger.Debug("Checkpoint: batch {0} completed", batchId);
-            }
-        }
-
-        return (synced, skipped, errors, batchId, processedInFolder);
-    }
-
     private static bool ShouldUseDateFallback(Exception ex)
     {
-        // Check for common indicators that delta token is invalid
-        // Microsoft Graph returns specific errors when resync is needed
         var message = ex.Message.ToUpperInvariant();
         return message.Contains("RESYNC") ||
                message.Contains("DELTA") ||
                message.Contains("SYNC_STATE") ||
                message.Contains("TOKEN") && (message.Contains("INVALID") || message.Contains("EXPIRED"));
-    }
-
-    private async Task<(int synced, int skipped, int errors)> ProcessBatchAsync(
-        List<MessageInfo> messages,
-        AppMailFolder folder,
-        string mailbox,
-        SyncOptions options,
-        CancellationToken cancellationToken)
-    {
-        var synced = 0;
-        var skipped = 0;
-        var errors = 0;
-
-        // Use semaphore for controlled parallelism
-        using var semaphore = new SemaphoreSlim(options.MaxParallelDownloads);
-        var tasks = messages.Select(async message =>
-        {
-            await semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                return await ProcessMessageAsync(message, folder, mailbox, options, cancellationToken);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        var results = await Task.WhenAll(tasks);
-
-        foreach (var result in results)
-        {
-            switch (result)
-            {
-                case MessageProcessResult.Synced:
-                    synced++;
-                    break;
-                case MessageProcessResult.Skipped:
-                    skipped++;
-                    break;
-                case MessageProcessResult.Error:
-                    errors++;
-                    break;
-            }
-        }
-
-        return (synced, skipped, errors);
     }
 
     private async Task<MessageProcessResult> ProcessMessageAsync(
@@ -734,7 +768,6 @@ public class SyncEngine : ISyncEngine
     {
         try
         {
-            // Check if message already exists (by immutable ID)
             var immutableId = messageInfo.ImmutableId ?? messageInfo.Id;
             var existingMessage = await _database.GetMessageByImmutableIdAsync(immutableId, cancellationToken);
 
@@ -750,13 +783,11 @@ public class SyncEngine : ISyncEngine
                 return MessageProcessResult.Synced;
             }
 
-            // Download MIME content
             using var mimeStream = await _graphClient.DownloadMessageMimeAsync(
                 messageInfo.Id,
                 options.Mailbox,
                 cancellationToken);
 
-            // Store EML file
             var localPath = await _emlStorage.StoreEmlAsync(
                 mimeStream,
                 folder.FullPath,
@@ -764,10 +795,8 @@ public class SyncEngine : ISyncEngine
                 messageInfo.ReceivedDateTime,
                 cancellationToken);
 
-            // Get file size
             var fileSize = _emlStorage.GetFileSize(localPath);
 
-            // Record in database
             var message = new Message
             {
                 GraphId = messageInfo.Id,
@@ -776,12 +805,12 @@ public class SyncEngine : ISyncEngine
                 FolderPath = folder.FullPath,
                 Subject = messageInfo.Subject,
                 Sender = messageInfo.From,
-                Recipients = null, // Would need additional API call to get recipients
+                Recipients = null,
                 ReceivedTime = messageInfo.ReceivedDateTime,
                 Size = fileSize,
                 HasAttachments = messageInfo.HasAttachments,
-                InReplyTo = null, // Would parse from EML headers if needed
-                ConversationId = null, // Would need additional API call
+                InReplyTo = null,
+                ConversationId = null,
                 QuarantinedAt = null,
                 QuarantineReason = null,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -791,6 +820,29 @@ public class SyncEngine : ISyncEngine
             await _database.InsertMessageAsync(message, cancellationToken);
 
             _logger.Debug("Synced message: {0}", messageInfo.Subject ?? messageInfo.Id);
+
+            // Perform inline transformation if enabled
+            if (_transformationService != null && ShouldTransform(options))
+            {
+                var inlineOptions = new InlineTransformOptions
+                {
+                    GenerateHtml = options.GenerateHtml,
+                    GenerateMarkdown = options.GenerateMarkdown,
+                    ExtractAttachments = options.ExtractAttachments
+                };
+
+                var transformSuccess = await _transformationService.TransformSingleMessageAsync(
+                    message,
+                    inlineOptions,
+                    cancellationToken);
+
+                if (!transformSuccess)
+                {
+                    _logger.Warning("Inline transformation failed for message {0}", messageInfo.Subject ?? messageInfo.Id);
+                    // Note: We don't fail the sync if transformation fails - the EML is still stored
+                }
+            }
+
             return MessageProcessResult.Synced;
         }
         catch (Exception ex)
@@ -799,6 +851,9 @@ public class SyncEngine : ISyncEngine
             return MessageProcessResult.Error;
         }
     }
+
+    private static bool ShouldTransform(SyncOptions options) =>
+        options.GenerateHtml || options.GenerateMarkdown || options.ExtractAttachments;
 
     private enum MessageProcessResult
     {

@@ -39,6 +39,7 @@ public class TransformCommand : BaseCommand
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
+        ConfigureLogging(console);
         var logger = LoggerFactory.CreateLogger<TransformCommand>();
         var cancellationToken = console.RegisterCancellationHandler();
 

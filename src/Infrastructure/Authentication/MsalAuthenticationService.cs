@@ -43,6 +43,13 @@ public class MsalAuthenticationService : IAuthenticationService
         _logger = logger ?? LoggerFactory.CreateLogger<MsalAuthenticationService>();
         _scopes = scopes ?? DefaultScopes;
 
+        // Subscribe to cache errors for diagnostic logging
+        if (tokenCacheStorage is FileTokenCacheStorage fileCache)
+        {
+            fileCache.OnCacheError += (message, ex) =>
+                _logger.Warning("{0}: {1}", message, ex.Message);
+        }
+
         var authority = $"https://login.microsoftonline.com/{tenantId}";
 
         _msalClient = PublicClientApplicationBuilder
@@ -116,51 +123,77 @@ public class MsalAuthenticationService : IAuthenticationService
     /// <inheritdoc />
     public async Task<AppAuthenticationResult> AcquireTokenSilentAsync(CancellationToken cancellationToken = default)
     {
-        try
+        const int maxRetries = 3;
+        const int baseDelaySeconds = 10;
+
+        var accounts = await _msalClient.GetAccountsAsync();
+        var account = accounts.FirstOrDefault();
+
+        if (account == null)
         {
-            _logger.Debug("Attempting to acquire token silently");
+            _logger.Debug("No cached account found");
+            return AppAuthenticationResult.Failure("No cached credentials found. Please run 'auth login' first.");
+        }
 
-            var accounts = await _msalClient.GetAccountsAsync();
-            var account = accounts.FirstOrDefault();
-
-            if (account == null)
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
             {
-                _logger.Debug("No cached account found");
-                return AppAuthenticationResult.Failure("No cached credentials found. Please run 'auth login' first.");
+                _logger.Debug("Attempting to acquire token silently (attempt {0}/{1})", attempt, maxRetries);
+
+                var result = await _msalClient.AcquireTokenSilent(_scopes, account)
+                    .ExecuteAsync(cancellationToken);
+
+                _logger.Debug("Successfully acquired token silently for {0}", account.Username);
+
+                return AppAuthenticationResult.Success(
+                    result.AccessToken,
+                    result.Account.Username,
+                    result.ExpiresOn);
             }
+            catch (MsalUiRequiredException ex)
+            {
+                // Check if this is throttling vs actual token expiry
+                var isThrottled = ex.Message.Contains("throttled", StringComparison.OrdinalIgnoreCase);
 
-            var result = await _msalClient.AcquireTokenSilent(_scopes, account)
-                .ExecuteAsync(cancellationToken);
+                if (isThrottled && attempt < maxRetries)
+                {
+                    var delay = baseDelaySeconds * attempt;
+                    _logger.Warning("AAD throttling detected. Waiting {0} seconds before retry (attempt {1}/{2})...",
+                        delay, attempt, maxRetries);
+                    await Task.Delay(TimeSpan.FromSeconds(delay), cancellationToken);
+                    continue;
+                }
 
-            _logger.Debug("Successfully acquired token silently for {0}", account.Username);
+                _logger.Warning("Silent token acquisition failed - user interaction required: {0}", ex.Message);
+                return AppAuthenticationResult.Failure("Cached credentials have expired. Please run 'auth login' to re-authenticate.");
+            }
+            catch (MsalException ex)
+            {
+                _logger.Error(ex, "MSAL error during silent token acquisition");
+                return AppAuthenticationResult.Failure($"Failed to refresh token: {ex.Message}");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, "Unexpected error during silent token acquisition");
+                return AppAuthenticationResult.Failure($"An unexpected error occurred: {ex.Message}");
+            }
+        }
 
-            return AppAuthenticationResult.Success(
-                result.AccessToken,
-                result.Account.Username,
-                result.ExpiresOn);
-        }
-        catch (MsalUiRequiredException ex)
-        {
-            _logger.Warning("Silent token acquisition failed - user interaction required: {0}", ex.Message);
-            return AppAuthenticationResult.Failure("Cached credentials have expired. Please run 'auth login' to re-authenticate.");
-        }
-        catch (MsalException ex)
-        {
-            _logger.Error(ex, "MSAL error during silent token acquisition");
-            return AppAuthenticationResult.Failure($"Failed to refresh token: {ex.Message}");
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Unexpected error during silent token acquisition");
-            return AppAuthenticationResult.Failure($"An unexpected error occurred: {ex.Message}");
-        }
+        return AppAuthenticationResult.Failure("Token acquisition failed after retries.");
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// This method checks authentication status by examining the local MSAL cache only.
+    /// It does NOT validate the token with AAD to avoid triggering throttling.
+    /// Actual token validation happens when AcquireTokenSilentAsync is called.
+    /// </remarks>
     public async Task<AuthenticationStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         try
         {
+            // GetAccountsAsync reads from local MSAL cache only - no network call
             var accounts = await _msalClient.GetAccountsAsync();
             var account = accounts.FirstOrDefault();
             var hasCache = await _tokenCacheStorage.ExistsAsync();
@@ -175,33 +208,17 @@ public class MsalAuthenticationService : IAuthenticationService
                 };
             }
 
-            // Try to acquire a token silently to verify the cache is valid
-            try
+            // Return authenticated status based on cached account existence
+            // We don't call AcquireTokenSilent here to avoid AAD throttling
+            // Token validity is verified when actual Graph API calls are made
+            return new AuthenticationStatus
             {
-                var result = await _msalClient.AcquireTokenSilent(_scopes, account)
-                    .ExecuteAsync(cancellationToken);
-
-                return new AuthenticationStatus
-                {
-                    IsAuthenticated = true,
-                    Account = account.Username,
-                    TenantId = account.HomeAccountId?.TenantId,
-                    HasCachedToken = true,
-                    CacheLocation = _tokenCacheStorage.StorageDescription
-                };
-            }
-            catch (MsalUiRequiredException)
-            {
-                // Token exists but has expired
-                return new AuthenticationStatus
-                {
-                    IsAuthenticated = false,
-                    Account = account.Username,
-                    TenantId = account.HomeAccountId?.TenantId,
-                    HasCachedToken = true,
-                    CacheLocation = _tokenCacheStorage.StorageDescription
-                };
-            }
+                IsAuthenticated = true,
+                Account = account.Username,
+                TenantId = account.HomeAccountId?.TenantId,
+                HasCachedToken = hasCache,
+                CacheLocation = _tokenCacheStorage.StorageDescription
+            };
         }
         catch (Exception ex)
         {

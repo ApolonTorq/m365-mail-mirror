@@ -210,4 +210,29 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     /// Batch inserts multiple ZIP extracted file records.
     /// </summary>
     Task InsertZipExtractedFilesAsync(IEnumerable<ZipExtractedFile> files, CancellationToken cancellationToken = default);
+
+    // Folder Sync Progress Operations (for streaming sync)
+
+    /// <summary>
+    /// Gets the sync progress for a folder.
+    /// Returns null if no sync is in progress for this folder.
+    /// </summary>
+    Task<FolderSyncProgress?> GetFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates or updates the sync progress for a folder.
+    /// Used for checkpointing during streaming sync.
+    /// </summary>
+    Task UpsertFolderSyncProgressAsync(FolderSyncProgress progress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes the sync progress for a folder.
+    /// Called when folder sync completes successfully.
+    /// </summary>
+    Task DeleteFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all folders with in-progress sync (for resume detection).
+    /// </summary>
+    Task<IReadOnlyList<FolderSyncProgress>> GetAllFolderSyncProgressAsync(CancellationToken cancellationToken = default);
 }

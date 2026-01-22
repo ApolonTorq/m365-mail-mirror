@@ -76,4 +76,11 @@ public interface IEmlStorageService
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The new relative path in the quarantine folder.</returns>
     Task<string> MoveToQuarantineAsync(string relativePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cleans up orphaned temporary files that are older than the specified age.
+    /// These can accumulate if the process crashes between temp file creation and rename.
+    /// </summary>
+    /// <param name="maxAge">Maximum age of temp files to keep. Files older than this are deleted.</param>
+    void CleanupOrphanedTempFiles(TimeSpan maxAge);
 }

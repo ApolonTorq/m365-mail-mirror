@@ -60,12 +60,14 @@ public class GraphMailClient : IGraphMailClient
                     config.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount"];
                     config.QueryParameters.Top = 100;
                     config.QueryParameters.IncludeHiddenFolders = "true";
+                    config.Headers.Add("Prefer", "IdType=\"ImmutableId\"");
                 }, cancellationToken)
                 : await _graphClient.Me.MailFolders.GetAsync(config =>
                 {
                     config.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount"];
                     config.QueryParameters.Top = 100;
                     config.QueryParameters.IncludeHiddenFolders = "true";
+                    config.Headers.Add("Prefer", "IdType=\"ImmutableId\"");
                 }, cancellationToken);
 
             if (response?.Value != null)
@@ -115,11 +117,13 @@ public class GraphMailClient : IGraphMailClient
                 {
                     config.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount"];
                     config.QueryParameters.Top = 100;
+                    config.Headers.Add("Prefer", "IdType=\"ImmutableId\"");
                 }, cancellationToken)
                 : await _graphClient.Me.MailFolders[graphFolder.Id].ChildFolders.GetAsync(config =>
                 {
                     config.QueryParameters.Select = ["id", "displayName", "parentFolderId", "totalItemCount", "unreadItemCount"];
                     config.QueryParameters.Top = 100;
+                    config.Headers.Add("Prefer", "IdType=\"ImmutableId\"");
                 }, cancellationToken);
 
             if (childResponse?.Value != null)
@@ -153,9 +157,25 @@ public class GraphMailClient : IGraphMailClient
         {
             IEnumerable<Message>? messageValues = null;
 
-            // Get messages using delta query
-            if (mailbox != null)
+            // If we have a deltaToken, it's either a nextLink (for pagination) or deltaLink (for incremental sync)
+            // Both are full URLs that we need to follow using WithUrl
+            if (!string.IsNullOrEmpty(deltaToken))
             {
+                // Follow the continuation URL (either nextLink or deltaLink)
+                var response = await _graphClient.Users[mailbox ?? "me"].MailFolders[folderId].Messages.Delta
+                    .WithUrl(deltaToken)
+                    .GetAsDeltaGetResponseAsync(config =>
+                    {
+                        config.Headers.Add("Prefer", "IdType=\"ImmutableId\"");
+                    }, cancellationToken);
+
+                messageValues = response?.Value;
+                nextLink = response?.OdataNextLink;
+                deltaLink = response?.OdataDeltaLink;
+            }
+            else if (mailbox != null)
+            {
+                // Initial delta query for a specific mailbox
                 var response = await _graphClient.Users[mailbox].MailFolders[folderId].Messages.Delta.GetAsDeltaGetResponseAsync(config =>
                 {
                     config.QueryParameters.Select = ["id", "internetMessageId", "subject", "from", "receivedDateTime", "hasAttachments", "parentFolderId"];
@@ -168,6 +188,7 @@ public class GraphMailClient : IGraphMailClient
             }
             else
             {
+                // Initial delta query for the authenticated user's mailbox
                 var response = await _graphClient.Me.MailFolders[folderId].Messages.Delta.GetAsDeltaGetResponseAsync(config =>
                 {
                     config.QueryParameters.Select = ["id", "internetMessageId", "subject", "from", "receivedDateTime", "hasAttachments", "parentFolderId"];

@@ -173,7 +173,7 @@ public static class ConfigurationLoader
         ApplyEnvVar("OUTPUT_PATH", value => config.OutputPath = value);
 
         // Sync configuration
-        ApplyEnvVarInt("SYNC_BATCH_SIZE", value => config.Sync.BatchSize = value);
+        ApplyEnvVarInt("SYNC_CHECKPOINT_INTERVAL", value => config.Sync.CheckpointInterval = value);
         ApplyEnvVarInt("SYNC_PARALLEL", value => config.Sync.Parallel = value);
         ApplyEnvVarInt("SYNC_OVERLAP_MINUTES", value => config.Sync.OverlapMinutes = value);
 

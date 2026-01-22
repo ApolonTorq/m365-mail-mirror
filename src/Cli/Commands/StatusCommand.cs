@@ -25,6 +25,7 @@ public class StatusCommand : BaseCommand
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
+        ConfigureLogging(console, Verbose);
         var logger = LoggerFactory.CreateLogger<StatusCommand>();
         var cancellationToken = console.RegisterCancellationHandler();
 

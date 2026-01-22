@@ -76,9 +76,11 @@ public class SyncResult
 public class SyncOptions
 {
     /// <summary>
-    /// Number of messages to process per batch. Default is 100.
+    /// Number of messages after which to checkpoint progress during streaming sync.
+    /// Lower values provide finer recovery granularity but more database writes.
+    /// Default is 10.
     /// </summary>
-    public int BatchSize { get; init; } = 100;
+    public int CheckpointInterval { get; init; } = 10;
 
     /// <summary>
     /// Maximum number of parallel download operations. Default is 4.
@@ -163,7 +165,12 @@ public class SyncProgress
     public int TotalMessagesSynced { get; init; }
 
     /// <summary>
-    /// Current batch number being processed.
+    /// Current page number being processed (for streaming sync).
     /// </summary>
-    public int CurrentBatch { get; init; }
+    public int CurrentPage { get; init; }
+
+    /// <summary>
+    /// Messages processed in current page.
+    /// </summary>
+    public int MessagesInCurrentPage { get; init; }
 }

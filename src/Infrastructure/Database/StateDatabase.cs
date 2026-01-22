@@ -20,7 +20,7 @@ public class StateDatabase : IStateDatabase
     /// <summary>
     /// The current schema version. Increment when making schema changes.
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>
     /// The default database filename.
@@ -38,8 +38,8 @@ public class StateDatabase : IStateDatabase
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
-            Pooling = true
+            Cache = SqliteCacheMode.Private,
+            Pooling = false
         }.ToString();
 
         _logger = logger ?? LoggerFactory.CreateLogger<StateDatabase>();
@@ -117,8 +117,10 @@ public class StateDatabase : IStateDatabase
                 await ApplySchemaV1Async(connection, cancellationToken);
             }
 
-            // Future migrations would go here:
-            // if (fromVersion < 2) await ApplySchemaV2Async(connection, cancellationToken);
+            if (fromVersion < 2)
+            {
+                await ApplySchemaV2Async(connection, cancellationToken);
+            }
 
             await transaction.CommitAsync(cancellationToken);
             _logger.Info("Database schema migration completed successfully");
@@ -262,6 +264,34 @@ CREATE INDEX IF NOT EXISTS idx_zip_extractions_message ON zip_extractions(messag
 CREATE INDEX IF NOT EXISTS idx_zip_extractions_attachment ON zip_extractions(attachment_id);
 CREATE INDEX IF NOT EXISTS idx_zip_extracted_files_zip ON zip_extracted_files(zip_extraction_id);
 ";
+
+    private const string SchemaV2 = @"
+-- Folder sync progress tracking for streaming sync
+-- Created when sync starts on a folder, deleted when complete
+-- Enables fine-grained resumption from exact page and message position
+CREATE TABLE IF NOT EXISTS folder_sync_progress (
+    folder_id TEXT PRIMARY KEY,
+    pending_next_link TEXT,
+    pending_page_number INTEGER NOT NULL DEFAULT 0,
+    pending_message_index INTEGER NOT NULL DEFAULT 0,
+    sync_started_at TEXT,
+    last_checkpoint_at TEXT,
+    messages_processed INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (folder_id) REFERENCES folders(graph_id) ON DELETE CASCADE
+);
+";
+
+    private static async Task ApplySchemaV2Async(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SchemaV2;
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+        // Record schema version
+        using var versionCmd = connection.CreateCommand();
+        versionCmd.CommandText = "INSERT INTO schema_version (version) VALUES (2)";
+        await versionCmd.ExecuteNonQueryAsync(cancellationToken);
+    }
 
     /// <inheritdoc />
     public async Task<IDatabaseTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
@@ -659,6 +689,35 @@ CREATE INDEX IF NOT EXISTS idx_zip_extracted_files_zip ON zip_extracted_files(zi
     {
         var connection = await GetConnectionAsync(cancellationToken);
 
+        // Handle migration from mutable to immutable folder IDs:
+        // If a folder exists with the same local_path but different graph_id,
+        // copy its delta_token and last_sync_time before deleting it
+        using (var selectCmd = connection.CreateCommand())
+        {
+            selectCmd.CommandText = @"
+                SELECT delta_token, last_sync_time FROM folders
+                WHERE local_path = @localPath AND graph_id != @graphId";
+            selectCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
+            selectCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
+
+            using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                // Copy delta_token and last_sync_time from old record if not already set
+                folder.DeltaToken ??= reader.IsDBNull(0) ? null : reader.GetString(0);
+                folder.LastSyncTime ??= reader.IsDBNull(1) ? null : DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture);
+            }
+        }
+
+        // Delete the old record with different graph_id
+        using (var deleteCmd = connection.CreateCommand())
+        {
+            deleteCmd.CommandText = "DELETE FROM folders WHERE local_path = @localPath AND graph_id != @graphId";
+            deleteCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
+            deleteCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
+            await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
             INSERT INTO folders (graph_id, parent_folder_id, local_path, display_name,
@@ -673,8 +732,8 @@ CREATE INDEX IF NOT EXISTS idx_zip_extracted_files_zip ON zip_extracted_files(zi
                 display_name = @displayName,
                 total_item_count = @totalItemCount,
                 unread_item_count = @unreadItemCount,
-                delta_token = @deltaToken,
-                last_sync_time = @lastSyncTime,
+                delta_token = COALESCE(@deltaToken, folders.delta_token),
+                last_sync_time = COALESCE(@lastSyncTime, folders.last_sync_time),
                 updated_at = @updatedAt";
 
         cmd.Parameters.AddWithValue("@graphId", folder.GraphId);
@@ -1138,6 +1197,109 @@ CREATE INDEX IF NOT EXISTS idx_zip_extracted_files_zip ON zip_extracted_files(zi
             RelativePath = reader.GetString(2),
             ExtractedPath = reader.GetString(3),
             SizeBytes = reader.GetInt64(4)
+        };
+    }
+
+    #endregion
+
+    #region Folder Sync Progress Operations
+
+    /// <inheritdoc />
+    public async Task<FolderSyncProgress?> GetFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
+                   sync_started_at, last_checkpoint_at, messages_processed
+            FROM folder_sync_progress
+            WHERE folder_id = @folderId";
+        cmd.Parameters.AddWithValue("@folderId", folderId);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            return ReadFolderSyncProgress(reader);
+        }
+
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task UpsertFolderSyncProgressAsync(FolderSyncProgress progress, CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO folder_sync_progress (folder_id, pending_next_link, pending_page_number, pending_message_index,
+                                              sync_started_at, last_checkpoint_at, messages_processed)
+            VALUES (@folderId, @pendingNextLink, @pendingPageNumber, @pendingMessageIndex,
+                    @syncStartedAt, @lastCheckpointAt, @messagesProcessed)
+            ON CONFLICT(folder_id) DO UPDATE SET
+                pending_next_link = @pendingNextLink,
+                pending_page_number = @pendingPageNumber,
+                pending_message_index = @pendingMessageIndex,
+                last_checkpoint_at = @lastCheckpointAt,
+                messages_processed = @messagesProcessed";
+
+        cmd.Parameters.AddWithValue("@folderId", progress.FolderId);
+        cmd.Parameters.AddWithValue("@pendingNextLink", (object?)progress.PendingNextLink ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@pendingPageNumber", progress.PendingPageNumber);
+        cmd.Parameters.AddWithValue("@pendingMessageIndex", progress.PendingMessageIndex);
+        cmd.Parameters.AddWithValue("@syncStartedAt", progress.SyncStartedAt.HasValue ? progress.SyncStartedAt.Value.ToString("O") : DBNull.Value);
+        cmd.Parameters.AddWithValue("@lastCheckpointAt", progress.LastCheckpointAt.HasValue ? progress.LastCheckpointAt.Value.ToString("O") : DBNull.Value);
+        cmd.Parameters.AddWithValue("@messagesProcessed", progress.MessagesProcessed);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM folder_sync_progress WHERE folder_id = @folderId";
+        cmd.Parameters.AddWithValue("@folderId", folderId);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<FolderSyncProgress>> GetAllFolderSyncProgressAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
+                   sync_started_at, last_checkpoint_at, messages_processed
+            FROM folder_sync_progress
+            ORDER BY sync_started_at";
+
+        var results = new List<FolderSyncProgress>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadFolderSyncProgress(reader));
+        }
+
+        return results;
+    }
+
+    private static FolderSyncProgress ReadFolderSyncProgress(SqliteDataReader reader)
+    {
+        return new FolderSyncProgress
+        {
+            FolderId = reader.GetString(0),
+            PendingNextLink = reader.IsDBNull(1) ? null : reader.GetString(1),
+            PendingPageNumber = reader.GetInt32(2),
+            PendingMessageIndex = reader.GetInt32(3),
+            SyncStartedAt = reader.IsDBNull(4) ? null : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+            LastCheckpointAt = reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+            MessagesProcessed = reader.GetInt32(6)
         };
     }
 

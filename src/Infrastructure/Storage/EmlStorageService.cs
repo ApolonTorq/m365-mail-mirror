@@ -83,7 +83,8 @@ public class EmlStorageService : IEmlStorageService
         }
 
         // Write atomically using temp file then rename
-        var tempPath = fullPath + ".tmp";
+        // Use GUID in temp filename to prevent race conditions in parallel downloads
+        var tempPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
         try
         {
             await using (var fileStream = new FileStream(
@@ -305,5 +306,41 @@ public class EmlStorageService : IEmlStorageService
 
         _logger.Debug("Quarantined EML file from {0} to {1}", relativePath, quarantinePath);
         return Task.FromResult(quarantinePath);
+    }
+
+    /// <inheritdoc />
+    public void CleanupOrphanedTempFiles(TimeSpan maxAge)
+    {
+        var emlRoot = Path.Combine(_archiveRoot, EmlDirectory);
+        if (!Directory.Exists(emlRoot))
+        {
+            return;
+        }
+
+        var cutoff = DateTime.UtcNow - maxAge;
+        var cleanedCount = 0;
+
+        foreach (var tmpFile in Directory.EnumerateFiles(emlRoot, "*.tmp", SearchOption.AllDirectories))
+        {
+            try
+            {
+                var fileInfo = new FileInfo(tmpFile);
+                if (fileInfo.LastWriteTimeUtc < cutoff)
+                {
+                    File.Delete(tmpFile);
+                    cleanedCount++;
+                    _logger.Debug("Cleaned up orphaned temp file: {0}", tmpFile);
+                }
+            }
+            catch
+            {
+                // Ignore cleanup errors - file may be in use or already deleted
+            }
+        }
+
+        if (cleanedCount > 0)
+        {
+            _logger.Info("Cleaned up {0} orphaned temp files", cleanedCount);
+        }
     }
 }

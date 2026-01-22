@@ -14,6 +14,7 @@ public class AuthLogoutCommand : BaseCommand
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
+        ConfigureLogging(console);
         var logger = LoggerFactory.CreateLogger<AuthLogoutCommand>();
 
         // Load configuration

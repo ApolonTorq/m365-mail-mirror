@@ -15,7 +15,17 @@ Feature completion is tracked with checkboxes:
 
 ### Added
 
-(Tasks to be added)
+- [x] **Streaming sync with checkpointing** (ADR-008): Per-message checkpointing via `--checkpoint-interval`, `FolderSyncProgress` entity, database schema v2 with `folder_sync_progress` table
+- [x] **AAD throttling mitigation** (ADR-009): Token caching with 5-min proactive refresh, exponential backoff retries, local-only cache reads for `GetStatusAsync`
+- [x] **Inline transformation during sync**: `--html`, `--markdown`, `--attachments` flags work during sync via `TransformSingleMessageAsync`
+- [x] **Integration tests**: Test fixture with auth/config loading, console capture utilities, coverage for sync/transform/status/verify commands
+- [x] **CLI improvements**: Verbose flag (`-v`), configurable log output writers, improved progress reporting
+
+### Changed
+
+- [x] Renamed `--batch-size` to `--checkpoint-interval` (default 10)
+- [x] Database uses private cache mode and disabled pooling for better concurrency
+- [x] Folder upsert handles mutable→immutable Graph ID migration (preserves delta tokens)
 
 ## [0.1.0] - Initial Release
 

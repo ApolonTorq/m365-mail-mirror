@@ -41,7 +41,7 @@ public class ConfigurationLoaderTests : IDisposable
         config.Should().NotBeNull();
         config.TenantId.Should().Be("common");
         config.OutputPath.Should().Be(".");
-        config.Sync.BatchSize.Should().Be(100);
+        config.Sync.CheckpointInterval.Should().Be(10);
         config.Sync.Parallel.Should().Be(5);
         config.Transform.GenerateHtml.Should().BeTrue();
         config.Transform.GenerateMarkdown.Should().BeFalse();
@@ -57,7 +57,7 @@ public class ConfigurationLoaderTests : IDisposable
             tenantId: test-tenant-id
             outputPath: /archive/mail
             sync:
-              batchSize: 50
+              checkpointInterval: 50
               parallel: 10
             transform:
               generateHtml: true
@@ -70,7 +70,7 @@ public class ConfigurationLoaderTests : IDisposable
         config.ClientId.Should().Be("test-client-id");
         config.TenantId.Should().Be("test-tenant-id");
         config.OutputPath.Should().Be("/archive/mail");
-        config.Sync.BatchSize.Should().Be(50);
+        config.Sync.CheckpointInterval.Should().Be(50);
         config.Sync.Parallel.Should().Be(10);
         config.Transform.GenerateHtml.Should().BeTrue();
         config.Transform.GenerateMarkdown.Should().BeTrue();
@@ -87,7 +87,7 @@ public class ConfigurationLoaderTests : IDisposable
         File.WriteAllText(configPath, yaml);
 
         SetEnvVar("M365_MAIL_MIRROR_CLIENT_ID", "env-client-id");
-        SetEnvVar("M365_MAIL_MIRROR_SYNC_BATCH_SIZE", "200");
+        SetEnvVar("M365_MAIL_MIRROR_SYNC_CHECKPOINT_INTERVAL", "200");
         SetEnvVar("M365_MAIL_MIRROR_TRANSFORM_GENERATE_MARKDOWN", "true");
 
         var config = ConfigurationLoader.Load(configPath);
@@ -97,7 +97,7 @@ public class ConfigurationLoaderTests : IDisposable
         // File value should be preserved when no env var
         config.TenantId.Should().Be("file-tenant-id");
         // Integer env var should be parsed
-        config.Sync.BatchSize.Should().Be(200);
+        config.Sync.CheckpointInterval.Should().Be(200);
         // Boolean env var should be parsed
         config.Transform.GenerateMarkdown.Should().BeTrue();
     }
@@ -149,7 +149,7 @@ public class ConfigurationLoaderTests : IDisposable
             ClientId = "saved-client-id",
             TenantId = "saved-tenant-id",
             OutputPath = "/saved/path",
-            Sync = new SyncConfiguration { BatchSize = 75 }
+            Sync = new SyncConfiguration { CheckpointInterval = 75 }
         };
 
         ConfigurationLoader.Save(config, configPath);
@@ -204,7 +204,7 @@ public class ConfigurationLoaderTests : IDisposable
 
         config.ClientId.Should().Be("partial-client-id");
         config.TenantId.Should().Be("common"); // Default value
-        config.Sync.BatchSize.Should().Be(100); // Default value
+        config.Sync.CheckpointInterval.Should().Be(10); // Default value
         config.Transform.GenerateHtml.Should().BeTrue(); // Default value
     }
 

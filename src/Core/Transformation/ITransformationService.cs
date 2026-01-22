@@ -1,3 +1,5 @@
+using M365MailMirror.Core.Database.Entities;
+
 namespace M365MailMirror.Core.Transform;
 
 /// <summary>
@@ -35,6 +37,33 @@ public class TransformOptions
     /// Enable attachment extraction.
     /// </summary>
     public bool EnableAttachments { get; init; } = true;
+}
+
+/// <summary>
+/// Options for inline transformation during sync.
+/// Used when transforming messages immediately after download.
+/// </summary>
+public class InlineTransformOptions
+{
+    /// <summary>
+    /// Whether to generate HTML transformation.
+    /// </summary>
+    public bool GenerateHtml { get; init; }
+
+    /// <summary>
+    /// Whether to generate Markdown transformation.
+    /// </summary>
+    public bool GenerateMarkdown { get; init; }
+
+    /// <summary>
+    /// Whether to extract attachments.
+    /// </summary>
+    public bool ExtractAttachments { get; init; }
+
+    /// <summary>
+    /// Returns true if any transformation is enabled.
+    /// </summary>
+    public bool HasAnyTransformation => GenerateHtml || GenerateMarkdown || ExtractAttachments;
 }
 
 /// <summary>
@@ -155,5 +184,18 @@ public interface ITransformationService
     Task<TransformResult> TransformAsync(
         TransformOptions options,
         TransformProgressCallback? progressCallback = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Transforms a single message immediately after download.
+    /// Used for inline transformation during sync.
+    /// </summary>
+    /// <param name="message">The message entity that was just stored.</param>
+    /// <param name="options">Which transformations to apply (HTML, Markdown, attachments).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True if transformation succeeded, false if any errors occurred.</returns>
+    Task<bool> TransformSingleMessageAsync(
+        Message message,
+        InlineTransformOptions options,
         CancellationToken cancellationToken = default);
 }

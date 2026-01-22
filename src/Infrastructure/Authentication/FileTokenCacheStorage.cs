@@ -13,6 +13,11 @@ public class FileTokenCacheStorage : ITokenCacheStorage
     private readonly object _fileLock = new();
 
     /// <summary>
+    /// Event raised when a cache operation fails, for diagnostic purposes.
+    /// </summary>
+    public event Action<string, Exception>? OnCacheError;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="FileTokenCacheStorage"/> class.
     /// </summary>
     /// <param name="cacheFilePath">Optional custom cache file path. Defaults to user's config directory.</param>
@@ -42,9 +47,10 @@ public class FileTokenCacheStorage : ITokenCacheStorage
                 var data = Unprotect(encryptedData);
                 return Task.FromResult<byte[]?>(data);
             }
-            catch
+            catch (Exception ex)
             {
-                // If decryption fails, return null (will require re-authentication)
+                // Log the actual error for diagnostics instead of silently failing
+                OnCacheError?.Invoke($"Failed to read/decrypt token cache from {_cacheFilePath}", ex);
                 return Task.FromResult<byte[]?>(null);
             }
         }

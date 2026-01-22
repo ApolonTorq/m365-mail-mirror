@@ -2,11 +2,14 @@ namespace M365MailMirror.Core.Logging;
 
 /// <summary>
 /// Factory for creating application loggers.
+/// Supports configurable output destinations for test isolation.
 /// </summary>
 public static class LoggerFactory
 {
     private static IAppLogger? _defaultLogger;
     private static AppLogLevel _defaultLevel = AppLogLevel.Info;
+    private static TextWriter? _outputWriter;
+    private static TextWriter? _errorWriter;
 
     /// <summary>
     /// Gets or sets the default minimum log level.
@@ -26,8 +29,13 @@ public static class LoggerFactory
 
     /// <summary>
     /// Gets the default logger instance.
+    /// Uses configured output writers if set, otherwise defaults to Console.Out/Error.
     /// </summary>
-    public static IAppLogger Default => _defaultLogger ??= new ConsoleLogger(_defaultLevel);
+    public static IAppLogger Default => _defaultLogger ??= new ConsoleLogger(
+        _defaultLevel,
+        null,
+        _outputWriter ?? Console.Out,
+        _errorWriter ?? Console.Error);
 
     /// <summary>
     /// Creates a new console logger with the specified minimum level.
@@ -64,7 +72,13 @@ public static class LoggerFactory
     /// </summary>
     /// <param name="minimumLevel">The minimum log level to output.</param>
     /// <param name="verbose">If true, sets minimum level to Debug.</param>
-    public static void Configure(AppLogLevel? minimumLevel = null, bool verbose = false)
+    /// <param name="output">Custom output writer for standard log messages. Defaults to Console.Out.</param>
+    /// <param name="error">Custom output writer for error messages. Defaults to Console.Error.</param>
+    public static void Configure(
+        AppLogLevel? minimumLevel = null,
+        bool verbose = false,
+        TextWriter? output = null,
+        TextWriter? error = null)
     {
         if (verbose)
         {
@@ -75,16 +89,22 @@ public static class LoggerFactory
             DefaultLevel = minimumLevel.Value;
         }
 
+        _outputWriter = output;
+        _errorWriter = error;
+
         // Reset default logger to pick up new settings
         _defaultLogger = null;
     }
 
     /// <summary>
     /// Resets the logger factory to default settings.
+    /// Clears any configured output writers, reverting to Console.Out/Error.
     /// </summary>
     public static void Reset()
     {
         _defaultLogger = null;
         _defaultLevel = AppLogLevel.Info;
+        _outputWriter = null;
+        _errorWriter = null;
     }
 }

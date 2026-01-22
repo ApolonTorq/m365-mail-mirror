@@ -3,6 +3,7 @@ using CliFx.Attributes;
 using CliFx.Exceptions;
 using CliFx.Infrastructure;
 using M365MailMirror.Core.Exceptions;
+using M365MailMirror.Core.Logging;
 
 namespace M365MailMirror.Cli.Commands;
 
@@ -143,5 +144,19 @@ public abstract class BaseCommand : ICommand
         console.ForegroundColor = ConsoleColor.Green;
         await console.Output.WriteLineAsync(message);
         console.ResetColor();
+    }
+
+    /// <summary>
+    /// Configures logging to output through the provided console.
+    /// Call this at the start of ExecuteCommandAsync to route logger output through the console.
+    /// </summary>
+    /// <param name="console">The console to route log output to.</param>
+    /// <param name="verbose">If true, sets minimum log level to Debug.</param>
+    protected static void ConfigureLogging(IConsole console, bool verbose = false)
+    {
+        LoggerFactory.Configure(
+            verbose: verbose,
+            output: console.Output,
+            error: console.Error);
     }
 }

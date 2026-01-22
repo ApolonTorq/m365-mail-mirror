@@ -52,9 +52,10 @@ public class AppConfiguration
 public class SyncConfiguration
 {
     /// <summary>
-    /// Number of messages to process per batch.
+    /// Number of messages after which to checkpoint progress during streaming sync.
+    /// Lower values provide finer recovery granularity but more database writes.
     /// </summary>
-    public int BatchSize { get; set; } = 100;
+    public int CheckpointInterval { get; set; } = 10;
 
     /// <summary>
     /// Number of parallel downloads.

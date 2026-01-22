@@ -706,38 +706,52 @@ WHERE
 
 ### Initial Sync
 
-**Batch-based processing**:
+**Streaming processing** (messages download as they're discovered):
 
 ```
 1. Enumerate all folders (recursive)
 2. For each folder:
-   a. Request first batch of messages (default 100)
-   b. Download EML for each message
-   c. Generate transformations (if enabled)
-   d. Commit batch to database
-   e. Request next batch
-   f. Repeat until no more messages
+   a. Request first page of messages from delta query
+   b. For each message in page:
+      - Download EML file immediately
+      - Generate transformations (if enabled)
+      - Checkpoint progress every N messages (configurable, default 10)
+   c. Store nextLink, request next page
+   d. Repeat until no more pages
+   e. Store final deltaToken for folder
 ```
 
-**Checkpointing**:
+**Checkpointing** (fine-grained per-message):
 
 ```sql
--- After each batch
-UPDATE sync_state
-SET last_batch_id = @completed_batch_id
-WHERE mailbox = @mailbox;
-
-COMMIT;
+-- Progress saved to folder_sync_progress table
+-- Updated every N messages (configurable checkpoint interval)
+UPDATE folder_sync_progress
+SET pending_next_link = @nextLink,
+    pending_page_number = @pageNumber,
+    pending_message_index = @messageIndex,
+    messages_processed = messages_processed + @count,
+    last_checkpoint_at = @now
+WHERE folder_id = @folderId;
 ```
 
-**Resumption**:
+**Resumption** (exact position recovery):
 
 ```
-1. Check sync_state for last_batch_id
-2. If interrupted:
-   - Resume from next batch
-   - Skip already-downloaded messages
-   - Continue where left off
+1. Check folder_sync_progress for pending state
+2. If found:
+   - Resume from stored nextLink (page position)
+   - Skip first pending_message_index messages in page
+   - Continue downloading remaining messages
+3. If no pending progress:
+   - Use delta_token from folders table for incremental sync
+```
+
+**Completion**:
+
+```
+1. Store final deltaToken in folders table
+2. Delete folder_sync_progress record (folder complete)
 ```
 
 ### Incremental Sync
@@ -1118,10 +1132,23 @@ CREATE TABLE schema_version (
 CREATE TABLE sync_state (
     mailbox TEXT PRIMARY KEY,
     last_sync_time TEXT NOT NULL,      -- ISO 8601
-    last_batch_id INTEGER NOT NULL,
+    last_batch_id INTEGER NOT NULL,     -- Legacy, kept for compatibility
     last_delta_token TEXT,              -- For Graph delta queries
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+-- Folder sync progress (for streaming sync with fine-grained resumption)
+-- Created when sync starts on a folder, deleted when folder completes
+CREATE TABLE folder_sync_progress (
+    folder_id TEXT PRIMARY KEY,
+    pending_next_link TEXT,             -- Graph API nextLink for resumption
+    pending_page_number INTEGER NOT NULL DEFAULT 0,
+    pending_message_index INTEGER NOT NULL DEFAULT 0,  -- Position within page
+    sync_started_at TEXT,               -- ISO 8601
+    last_checkpoint_at TEXT,            -- ISO 8601
+    messages_processed INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (folder_id) REFERENCES folders(graph_id) ON DELETE CASCADE
 );
 
 -- Message tracking
@@ -1228,31 +1255,34 @@ CREATE INDEX idx_zip_extracted_files_zip ON zip_extracted_files(zip_extraction_i
 
 ### Transaction Strategy
 
-**Batch commits**:
+**Streaming checkpoints** (fine-grained per-message):
 
 ```csharp
-using var transaction = connection.BeginTransaction();
-
-foreach (var message in batch)
+// Process messages in mini-batches for checkpointing
+for (var i = 0; i < messages.Count; i += checkpointInterval)
 {
-    // Insert message
-    await InsertMessageAsync(message, transaction);
+    var miniBatch = messages.Skip(i).Take(checkpointInterval).ToList();
 
-    // Insert transformations
-    if (config.GenerateHtml)
-        await InsertTransformationAsync(message.Id, "html", transaction);
+    // Process mini-batch with parallelism
+    foreach (var message in miniBatch)
+    {
+        // Each message: download EML, insert to database
+        await InsertMessageAsync(message);
 
-    if (config.GenerateMarkdown)
-        await InsertTransformationAsync(message.Id, "markdown", transaction);
+        // Insert transformations if enabled
+        if (config.GenerateHtml)
+            await InsertTransformationAsync(message.Id, "html");
+    }
+
+    // Checkpoint after each mini-batch
+    await UpdateFolderSyncProgressAsync(folderId, pageNumber, i + miniBatch.Count);
 }
-
-// Update sync state
-await UpdateSyncStateAsync(batchId, transaction);
-
-await transaction.CommitAsync();
 ```
 
-If crash occurs mid-batch, entire batch rolls back and is retried on next run.
+If crash occurs, sync resumes from last checkpoint:
+- Folder position preserved via `pending_next_link`
+- Message position within page preserved via `pending_message_index`
+- Already-synced messages detected by immutable ID (idempotent)
 
 ### Migration Strategy
 
@@ -2128,6 +2158,20 @@ dotnet test --filter FullyQualifiedName~SyncCommand_DryRun_NoFilesCreated
 - Visual Studio: Right-click test → Debug Test
 - Rider: Click debug icon next to test
 - VS Code: Use C# Dev Kit extension
+
+**Killing Stuck Tests**:
+
+`Ctrl+C` often fails to terminate running tests because `dotnet test` spawns a separate `testhost.exe` process that doesn't receive the signal. Use these commands to force-kill:
+
+```powershell
+# Kill all test-related processes (copy-paste ready)
+taskkill /F /IM testhost.exe /T 2>$null; taskkill /F /IM dotnet.exe /T 2>$null
+```
+
+```powershell
+# PowerShell alternative
+Get-Process dotnet, testhost -ErrorAction SilentlyContinue | Stop-Process -Force
+```
 
 ## Future Considerations
 
