@@ -246,4 +246,239 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
     }
 
     #endregion
+
+    #region Attachment Link Tests
+
+    [SkippableFact]
+    [TestDescription("HTML files contain links to extracted attachments")]
+    public async Task TransformCommand_HtmlGeneration_IncludesAttachmentLinks()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange - First extract attachments
+        using var attachmentConsole = CreateTestConsole();
+        var attachmentCommand = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = false,
+            Markdown = false,
+            Attachments = true,
+            Force = true,
+            Parallel = 2
+        };
+        await attachmentCommand.ExecuteAsync(attachmentConsole.Console);
+
+        // Then generate HTML with force to include attachment links
+        using var htmlConsole = CreateTestConsole();
+        var htmlCommand = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = true,
+            Markdown = false,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+        await htmlCommand.ExecuteAsync(htmlConsole.Console);
+
+        // Assert - Find attachment files and verify links in HTML
+        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "attachments");
+        if (!Directory.Exists(attachmentsDirectory))
+        {
+            Output.WriteLine("No attachments directory found - test mailbox may not contain attachments");
+            MarkCompleted();
+            return;
+        }
+
+        var attachmentFiles = Directory.GetFiles(attachmentsDirectory, "*.*", SearchOption.AllDirectories)
+            .Where(f => !f.EndsWith(".skipped", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (attachmentFiles.Count == 0)
+        {
+            Output.WriteLine("No non-skipped attachments found - test mailbox may not contain valid attachments");
+            MarkCompleted();
+            return;
+        }
+
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var verifiedCount = 0;
+
+        // Check up to 3 attachments for links in corresponding HTML files
+        foreach (var attachmentFile in attachmentFiles.Take(3))
+        {
+            var attachmentRelativePath = Path.GetRelativePath(Fixture.TestOutputPath, attachmentFile);
+            var attachmentFileName = Path.GetFileName(attachmentFile);
+
+            // Parse path: attachments/{folder}/{YYYY}/{MM}/{message}_attachments/{file}
+            var pathParts = attachmentRelativePath.Split(Path.DirectorySeparatorChar);
+            if (pathParts.Length >= 5 && pathParts[0] == "attachments")
+            {
+                var folder = pathParts[1];
+                var year = pathParts[2];
+                var month = pathParts[3];
+                var messageDir = pathParts[4]; // e.g., "Message_1030_attachments" or "Message_1030"
+
+                // Remove trailing directory name to get message base name
+                var messageBaseName = messageDir;
+
+                // Find matching HTML file in corresponding location
+                var htmlSearchDir = Path.Combine(htmlDirectory, folder, year, month);
+                if (Directory.Exists(htmlSearchDir))
+                {
+                    var matchingHtmlFiles = Directory.GetFiles(htmlSearchDir, "*.html")
+                        .Where(f => messageBaseName.StartsWith(
+                            Path.GetFileNameWithoutExtension(f),
+                            StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var htmlFile in matchingHtmlFiles)
+                    {
+                        var htmlContent = await File.ReadAllTextAsync(htmlFile);
+
+                        // Check that HTML contains the attachment filename
+                        if (htmlContent.Contains(attachmentFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Verify it's actually in an href link
+                            htmlContent.Should().Contain("href=",
+                                $"HTML file {htmlFile} should contain href attribute for attachment links");
+
+                            verifiedCount++;
+                            Output.WriteLine($"Verified attachment link: {attachmentFileName} in {Path.GetFileName(htmlFile)}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (attachmentFiles.Count > 0)
+        {
+            verifiedCount.Should().BeGreaterThan(0,
+                "At least one attachment link should be verified when attachments exist in test mailbox");
+        }
+
+        Output.WriteLine($"Total verified HTML attachment links: {verifiedCount}");
+        MarkCompleted();
+    }
+
+    [SkippableFact]
+    [TestDescription("Markdown files contain links to extracted attachments")]
+    public async Task TransformCommand_MarkdownGeneration_IncludesAttachmentLinks()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange - First extract attachments
+        using var attachmentConsole = CreateTestConsole();
+        var attachmentCommand = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = false,
+            Markdown = false,
+            Attachments = true,
+            Force = true,
+            Parallel = 2
+        };
+        await attachmentCommand.ExecuteAsync(attachmentConsole.Console);
+
+        // Then generate Markdown with force to include attachment links
+        using var mdConsole = CreateTestConsole();
+        var mdCommand = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = false,
+            Markdown = true,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+        await mdCommand.ExecuteAsync(mdConsole.Console);
+
+        // Assert - Find attachment files and verify links in Markdown
+        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "attachments");
+        if (!Directory.Exists(attachmentsDirectory))
+        {
+            Output.WriteLine("No attachments directory found - test mailbox may not contain attachments");
+            MarkCompleted();
+            return;
+        }
+
+        var attachmentFiles = Directory.GetFiles(attachmentsDirectory, "*.*", SearchOption.AllDirectories)
+            .Where(f => !f.EndsWith(".skipped", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (attachmentFiles.Count == 0)
+        {
+            Output.WriteLine("No non-skipped attachments found - test mailbox may not contain valid attachments");
+            MarkCompleted();
+            return;
+        }
+
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var verifiedCount = 0;
+
+        // Check up to 3 attachments for links in corresponding Markdown files
+        foreach (var attachmentFile in attachmentFiles.Take(3))
+        {
+            var attachmentRelativePath = Path.GetRelativePath(Fixture.TestOutputPath, attachmentFile);
+            var attachmentFileName = Path.GetFileName(attachmentFile);
+
+            // Parse path: attachments/{folder}/{YYYY}/{MM}/{message}_attachments/{file}
+            var pathParts = attachmentRelativePath.Split(Path.DirectorySeparatorChar);
+            if (pathParts.Length >= 5 && pathParts[0] == "attachments")
+            {
+                var folder = pathParts[1];
+                var year = pathParts[2];
+                var month = pathParts[3];
+                var messageDir = pathParts[4];
+
+                var messageBaseName = messageDir;
+
+                // Find matching Markdown file in corresponding location
+                var mdSearchDir = Path.Combine(mdDirectory, folder, year, month);
+                if (Directory.Exists(mdSearchDir))
+                {
+                    var matchingMdFiles = Directory.GetFiles(mdSearchDir, "*.md")
+                        .Where(f => messageBaseName.StartsWith(
+                            Path.GetFileNameWithoutExtension(f),
+                            StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var mdFile in matchingMdFiles)
+                    {
+                        var mdContent = await File.ReadAllTextAsync(mdFile);
+
+                        // Check that Markdown contains the attachment filename
+                        if (mdContent.Contains(attachmentFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Verify it's in Markdown link format [text](url)
+                            mdContent.Should().MatchRegex(@"\[.*?\]\(.*?\)",
+                                "Markdown file should contain link in [text](url) format");
+
+                            verifiedCount++;
+                            Output.WriteLine($"Verified attachment link: {attachmentFileName} in {Path.GetFileName(mdFile)}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (attachmentFiles.Count > 0)
+        {
+            verifiedCount.Should().BeGreaterThan(0,
+                "At least one attachment link should be verified when attachments exist in test mailbox");
+        }
+
+        Output.WriteLine($"Total verified Markdown attachment links: {verifiedCount}");
+        MarkCompleted();
+    }
+
+    #endregion
 }

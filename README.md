@@ -148,8 +148,8 @@ This will:
 ### 5. Browse Your Archive
 
 - **EML files**: Open in any email client (Outlook, Thunderbird, Apple Mail)
-- **HTML files** (if enabled): Open `html/` folder in web browser, navigate by folder/date
-- **Markdown files** (if enabled): Read with any text editor or feed to AI agents
+- **HTML files** (if enabled): Open `html/` folder in web browser, navigate by folder/date. Includes clickable links to extracted attachments in the email header.
+- **Markdown files** (if enabled): Read with any text editor or feed to AI agents. Includes attachment links using standard `[name](path)` syntax.
 - **Attachments** (if enabled): Access extracted files in `attachments/` folder
 
 ### 6. Understanding Attachment Handling
@@ -178,6 +178,36 @@ When a ZIP is extracted:
 - Contains executable files
 - Contains unsafe file paths
 - Empty or too few files
+
+### 7. Attachment Linking in HTML/Markdown
+
+When HTML or Markdown generation is enabled alongside attachment extraction, the generated files include an "Attachments" section in the email header with clickable links to extracted files:
+
+**HTML output** includes links after the To/CC/BCC/Date fields:
+
+```html
+<div class="attachments">
+    <strong>Attachments:</strong>
+    <ul>
+        <li><a href="../../../../attachments/Inbox/2024/01/Meeting_attachments/report.pdf">report.pdf</a> (1.2 MB)</li>
+    </ul>
+</div>
+```
+
+**Markdown output** includes links below the header:
+
+```markdown
+**Attachments:**
+- [report.pdf](../../../../attachments/Inbox/2024/01/Meeting_attachments/report.pdf) (1.2 MB)
+```
+
+**Key behaviors**:
+
+- Links use **relative paths** from the HTML/Markdown file to the attachment, enabling the archive to be moved without breaking links
+- **Skipped attachments** (executables) are listed but not linked, with a note explaining why
+- **Inline attachments** (embedded images in email body) are not listed in the attachments section
+- Links are only generated when attachments have been extracted; run `transform --only attachments` first if needed
+- Re-running `transform --force` will regenerate files with current attachment links
 
 ## Commands
 

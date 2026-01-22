@@ -182,13 +182,14 @@ public class TransformationService : ITransformationService
             return types;
         }
 
-        // Otherwise, add enabled types
+        // Attachments must be extracted BEFORE html/markdown so that
+        // attachment links and sizes are available when generating output
+        if (options.EnableAttachments)
+            types.Add("attachments");
         if (options.EnableHtml)
             types.Add("html");
         if (options.EnableMarkdown)
             types.Add("markdown");
-        if (options.EnableAttachments)
-            types.Add("attachments");
 
         return types;
     }
@@ -280,8 +281,11 @@ public class TransformationService : ITransformationService
         var outputPath = Path.Combine(outputDir, filename);
         var fullPath = Path.Combine(_archiveRoot, outputPath);
 
-        // Generate HTML
-        var html = GenerateHtml(mimeMessage);
+        // Fetch attachments for this message to include links in the output
+        var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
+
+        // Generate HTML with attachment links
+        var html = GenerateHtml(mimeMessage, outputPath, attachments);
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
@@ -300,8 +304,11 @@ public class TransformationService : ITransformationService
         var outputPath = Path.Combine(outputDir, filename);
         var fullPath = Path.Combine(_archiveRoot, outputPath);
 
-        // Generate Markdown
-        var markdown = GenerateMarkdown(mimeMessage);
+        // Fetch attachments for this message to include links in the output
+        var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
+
+        // Generate Markdown with attachment links
+        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments);
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
@@ -316,6 +323,16 @@ public class TransformationService : ITransformationService
         var outputDir = BuildOutputDirectory("attachments", message.FolderPath, message.ReceivedTime);
         var messageDir = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath));
         var attachmentDir = Path.Combine(outputDir, messageDir);
+
+        // Delete existing attachment records for this message to prevent duplicates on re-extraction
+        await _database.DeleteAttachmentsForMessageAsync(message.GraphId, cancellationToken);
+
+        // Also delete any existing attachment files to start fresh
+        var fullAttachmentDir = Path.Combine(_archiveRoot, attachmentDir);
+        if (Directory.Exists(fullAttachmentDir))
+        {
+            Directory.Delete(fullAttachmentDir, recursive: true);
+        }
 
         var hasAttachments = false;
         var attachmentCount = 0;
@@ -389,8 +406,11 @@ public class TransformationService : ITransformationService
                 counter++;
             }
 
-            using var stream = File.Create(fullPath);
-            await part.Content.DecodeToAsync(stream, cancellationToken);
+            // Use explicit block scope to ensure stream is closed before reading file size
+            {
+                using var stream = File.Create(fullPath);
+                await part.Content.DecodeToAsync(stream, cancellationToken);
+            }
             attachmentCount++;
 
             var fileSize = new FileInfo(fullPath).Length;
@@ -484,7 +504,7 @@ public class TransformationService : ITransformationService
             receivedTime.Month.ToString("D2", CultureInfo.InvariantCulture));
     }
 
-    private static string GenerateHtml(MimeMessage message)
+    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments)
     {
         var body = message.HtmlBody ?? message.TextBody ?? "";
 
@@ -493,6 +513,19 @@ public class TransformationService : ITransformationService
         {
             body = $"<pre>{System.Net.WebUtility.HtmlEncode(message.TextBody)}</pre>";
         }
+
+        // Build optional CC line
+        var ccLine = message.Cc != null && message.Cc.Count > 0
+            ? $"            <div><strong>CC:</strong> {System.Net.WebUtility.HtmlEncode(message.Cc.ToString())}</div>\n"
+            : "";
+
+        // Build optional BCC line
+        var bccLine = message.Bcc != null && message.Bcc.Count > 0
+            ? $"            <div><strong>BCC:</strong> {System.Net.WebUtility.HtmlEncode(message.Bcc.ToString())}</div>\n"
+            : "";
+
+        // Build attachments section
+        var attachmentsSection = GenerateAttachmentsHtml(outputPath, attachments);
 
         return $@"<!DOCTYPE html>
 <html lang=""en"">
@@ -506,6 +539,12 @@ public class TransformationService : ITransformationService
         .header h1 {{ margin: 0 0 10px 0; font-size: 1.2em; }}
         .header .meta {{ color: #666; font-size: 0.9em; }}
         .body {{ line-height: 1.6; }}
+        .attachments {{ margin-top: 10px; }}
+        .attachments ul {{ list-style-type: none; padding-left: 0; margin: 5px 0; }}
+        .attachments li {{ padding: 2px 0; }}
+        .attachments a {{ color: #0066cc; text-decoration: none; }}
+        .attachments a:hover {{ text-decoration: underline; }}
+        .skipped {{ color: #999; font-style: italic; }}
     </style>
 </head>
 <body>
@@ -514,8 +553,8 @@ public class TransformationService : ITransformationService
         <div class=""meta"">
             <div><strong>From:</strong> {System.Net.WebUtility.HtmlEncode(message.From?.ToString() ?? "")}</div>
             <div><strong>To:</strong> {System.Net.WebUtility.HtmlEncode(message.To?.ToString() ?? "")}</div>
-            <div><strong>Date:</strong> {message.Date:yyyy-MM-dd HH:mm:ss}</div>
-        </div>
+{ccLine}{bccLine}            <div><strong>Date:</strong> {message.Date:yyyy-MM-dd HH:mm:ss}</div>
+{attachmentsSection}        </div>
     </div>
     <div class=""body"">
         {body}
@@ -524,7 +563,7 @@ public class TransformationService : ITransformationService
 </html>";
     }
 
-    private static string GenerateMarkdown(MimeMessage message)
+    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments)
     {
         var textBody = message.TextBody ?? "";
 
@@ -534,19 +573,38 @@ public class TransformationService : ITransformationService
             textBody = StripHtml(message.HtmlBody);
         }
 
+        // Build optional CC fields
+        var ccFrontMatter = message.Cc != null && message.Cc.Count > 0
+            ? $"cc: \"{EscapeYamlString(message.Cc.ToString())}\"\n"
+            : "";
+        var ccLine = message.Cc != null && message.Cc.Count > 0
+            ? $"**CC:** {message.Cc}\n"
+            : "";
+
+        // Build optional BCC fields
+        var bccFrontMatter = message.Bcc != null && message.Bcc.Count > 0
+            ? $"bcc: \"{EscapeYamlString(message.Bcc.ToString())}\"\n"
+            : "";
+        var bccLine = message.Bcc != null && message.Bcc.Count > 0
+            ? $"**BCC:** {message.Bcc}\n"
+            : "";
+
+        // Build attachments section
+        var attachmentsSection = GenerateAttachmentsMarkdown(outputPath, attachments);
+
         return $@"---
 subject: ""{EscapeYamlString(message.Subject ?? "")}""
 from: ""{EscapeYamlString(message.From?.ToString() ?? "")}""
 to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
-date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
+{ccFrontMatter}{bccFrontMatter}date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
 ---
 
 # {message.Subject ?? "(no subject)"}
 
 **From:** {message.From}
 **To:** {message.To}
-**Date:** {message.Date:yyyy-MM-dd HH:mm:ss}
-
+{ccLine}{bccLine}**Date:** {message.Date:yyyy-MM-dd HH:mm:ss}
+{attachmentsSection}
 ---
 
 {textBody}
@@ -576,6 +634,134 @@ date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
         return filename;
     }
 
+    /// <summary>
+    /// Calculates the relative path from an output file to an attachment.
+    /// </summary>
+    /// <param name="outputFilePath">Relative path to output file from archive root (e.g., "html/Inbox/2024/01/file.html")</param>
+    /// <param name="attachmentFilePath">Relative path to attachment from archive root</param>
+    /// <returns>Relative path with forward slashes for HTML/Markdown compatibility</returns>
+    private static string CalculateRelativePathToAttachment(string outputFilePath, string attachmentFilePath)
+    {
+        // Get directory containing the output file
+        var outputDir = Path.GetDirectoryName(outputFilePath);
+        if (string.IsNullOrEmpty(outputDir))
+        {
+            return attachmentFilePath.Replace(Path.DirectorySeparatorChar, '/');
+        }
+
+        // Normalize separators for consistent splitting
+        var normalizedOutputDir = outputDir.Replace(Path.DirectorySeparatorChar, '/');
+        var normalizedAttachmentPath = attachmentFilePath.Replace(Path.DirectorySeparatorChar, '/');
+
+        // Split both paths into components
+        var outputParts = normalizedOutputDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var attachmentParts = normalizedAttachmentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Find common prefix length
+        var commonLength = 0;
+        var minLength = Math.Min(outputParts.Length, attachmentParts.Length);
+        for (var i = 0; i < minLength; i++)
+        {
+            if (outputParts[i].Equals(attachmentParts[i], StringComparison.OrdinalIgnoreCase))
+                commonLength++;
+            else
+                break;
+        }
+
+        // Build relative path: go up from output dir, then down to attachment
+        var upCount = outputParts.Length - commonLength;
+        var upParts = Enumerable.Repeat("..", upCount);
+        var downParts = attachmentParts.Skip(commonLength);
+
+        return string.Join("/", upParts.Concat(downParts));
+    }
+
+    /// <summary>
+    /// Formats a file size in bytes to a human-readable string.
+    /// </summary>
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    /// <summary>
+    /// Generates the HTML attachments section.
+    /// </summary>
+    private static string GenerateAttachmentsHtml(string outputPath, IReadOnlyList<Attachment>? attachments)
+    {
+        if (attachments == null || attachments.Count == 0)
+            return "";
+
+        // Filter to only non-inline attachments
+        var regularAttachments = attachments.Where(a => !a.IsInline).ToList();
+        if (regularAttachments.Count == 0)
+            return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("            <div class=\"attachments\">");
+        sb.AppendLine("                <strong>Attachments:</strong>");
+        sb.AppendLine("                <ul>");
+
+        foreach (var attachment in regularAttachments)
+        {
+            var displayName = System.Net.WebUtility.HtmlEncode(attachment.Filename);
+
+            if (attachment.Skipped)
+            {
+                var reason = System.Net.WebUtility.HtmlEncode(attachment.SkipReason ?? "Skipped");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"                    <li><span class=\"skipped\" title=\"{reason}\">{displayName}</span> (skipped)</li>");
+            }
+            else
+            {
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                var sizeFormatted = FormatFileSize(attachment.SizeBytes);
+                sb.AppendLine(CultureInfo.InvariantCulture, $"                    <li><a href=\"{relativePath}\">{displayName}</a> ({sizeFormatted})</li>");
+            }
+        }
+
+        sb.AppendLine("                </ul>");
+        sb.AppendLine("            </div>");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Generates the Markdown attachments section.
+    /// </summary>
+    private static string GenerateAttachmentsMarkdown(string outputPath, IReadOnlyList<Attachment>? attachments)
+    {
+        if (attachments == null || attachments.Count == 0)
+            return "";
+
+        // Filter to only non-inline attachments
+        var regularAttachments = attachments.Where(a => !a.IsInline).ToList();
+        if (regularAttachments.Count == 0)
+            return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("**Attachments:**");
+
+        foreach (var attachment in regularAttachments)
+        {
+            if (attachment.Skipped)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- {attachment.Filename} (skipped: {attachment.SkipReason ?? "unknown"})");
+            }
+            else
+            {
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                var sizeFormatted = FormatFileSize(attachment.SizeBytes);
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- [{attachment.Filename}]({relativePath}) ({sizeFormatted})");
+            }
+        }
+
+        return sb.ToString();
+    }
+
     /// <inheritdoc />
     public async Task<bool> TransformSingleMessageAsync(
         Message message,
@@ -589,6 +775,18 @@ date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
 
         try
         {
+            // Extract attachments FIRST so that attachment links and sizes
+            // are available when generating HTML/Markdown output
+            if (options.ExtractAttachments)
+            {
+                var result = await TransformMessageAsync(message, "attachments", cancellationToken);
+                if (result == TransformMessageResult.Error)
+                {
+                    success = false;
+                    _logger.Warning("Attachment extraction failed for message {0}", message.GraphId);
+                }
+            }
+
             if (options.GenerateHtml)
             {
                 var result = await TransformMessageAsync(message, "html", cancellationToken);
@@ -606,16 +804,6 @@ date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
                 {
                     success = false;
                     _logger.Warning("Markdown transformation failed for message {0}", message.GraphId);
-                }
-            }
-
-            if (options.ExtractAttachments)
-            {
-                var result = await TransformMessageAsync(message, "attachments", cancellationToken);
-                if (result == TransformMessageResult.Error)
-                {
-                    success = false;
-                    _logger.Warning("Attachment extraction failed for message {0}", message.GraphId);
                 }
             }
 

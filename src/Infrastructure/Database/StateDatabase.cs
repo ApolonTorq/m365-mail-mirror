@@ -1312,6 +1312,8 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
 
     #region IDisposable
 
+    private readonly object _disposeLock = new();
+
     public void Dispose()
     {
         Dispose(true);
@@ -1320,28 +1322,55 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
 
     protected virtual void Dispose(bool disposing)
     {
-        if (!_disposed)
+        lock (_disposeLock)
         {
-            if (disposing)
+            if (!_disposed)
             {
-                _connection?.Dispose();
-                _connection = null;
+                if (disposing)
+                {
+                    try
+                    {
+                        _connection?.Dispose();
+                    }
+                    catch
+                    {
+                        // Ignore disposal errors - connection may be in an invalid state
+                    }
+                    _connection = null;
+                }
+                _disposed = true;
             }
-            _disposed = true;
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (!_disposed)
+        // Capture the connection reference under lock to avoid race condition
+        SqliteConnection? connectionToDispose = null;
+
+        lock (_disposeLock)
         {
-            if (_connection != null)
+            if (!_disposed)
             {
-                await _connection.DisposeAsync();
+                connectionToDispose = _connection;
                 _connection = null;
+                _disposed = true;
             }
-            _disposed = true;
         }
+
+        // Dispose outside the lock to avoid blocking
+        if (connectionToDispose != null)
+        {
+            try
+            {
+                await connectionToDispose.DisposeAsync();
+            }
+            catch
+            {
+                // Ignore disposal errors - connection may be in an invalid state
+            }
+        }
+
         GC.SuppressFinalize(this);
     }
 

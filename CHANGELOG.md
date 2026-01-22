@@ -20,12 +20,20 @@ Feature completion is tracked with checkboxes:
 - [x] **Inline transformation during sync**: `--html`, `--markdown`, `--attachments` flags work during sync via `TransformSingleMessageAsync`
 - [x] **Integration tests**: Test fixture with auth/config loading, console capture utilities, coverage for sync/transform/status/verify commands
 - [x] **CLI improvements**: Verbose flag (`-v`), configurable log output writers, improved progress reporting
+- [x] **Attachment links in HTML/Markdown output**: Generated HTML and Markdown files now include clickable links to extracted attachments with relative paths and human-readable file sizes
+- [x] **CC/BCC fields in output**: HTML and Markdown transformations now include CC and BCC recipients when present
 
 ### Changed
 
 - [x] Renamed `--batch-size` to `--checkpoint-interval` (default 10)
 - [x] Database uses private cache mode and disabled pooling for better concurrency
 - [x] Folder upsert handles mutable→immutable Graph ID migration (preserves delta tokens)
+- [x] Transformation ordering: Attachments are now extracted before HTML/Markdown generation to ensure attachment links are available
+- [x] Attachment re-extraction: Running transform with `--attachments --force` now deletes existing attachment records and files before re-extracting
+
+### Fixed
+
+- [x] Thread-safe database disposal with proper locking to prevent race conditions during async cleanup
 
 ## [0.1.0] - Initial Release
 
