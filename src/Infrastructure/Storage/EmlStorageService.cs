@@ -23,6 +23,11 @@ public class EmlStorageService : IEmlStorageService
     private const int MaxCollisionAttempts = 1000;
 
     /// <summary>
+    /// Counter for generating unique temp file names within this process.
+    /// </summary>
+    private static long _tempFileCounter;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="EmlStorageService"/> class.
     /// </summary>
     /// <param name="archiveRoot">The root directory for the mail archive.</param>
@@ -83,8 +88,9 @@ public class EmlStorageService : IEmlStorageService
         }
 
         // Write atomically using temp file then rename
-        // Use GUID in temp filename to prevent race conditions in parallel downloads
-        var tempPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        // Use counter in temp filename to ensure uniqueness in parallel downloads
+        var tempId = Interlocked.Increment(ref _tempFileCounter);
+        var tempPath = $"{fullPath}.{tempId}.tmp";
         try
         {
             await using (var fileStream = new FileStream(
@@ -99,8 +105,36 @@ public class EmlStorageService : IEmlStorageService
                 await fileStream.FlushAsync(cancellationToken);
             }
 
-            // Atomic rename (on most filesystems)
-            File.Move(tempPath, fullPath, overwrite: false);
+            // Atomic rename with retry loop for race conditions
+            // Multiple parallel downloads may pass the File.Exists check simultaneously,
+            // then race to create the same file. Handle this by retrying with new counter.
+            while (true)
+            {
+                try
+                {
+                    File.Move(tempPath, fullPath, overwrite: false);
+                    break; // Success
+                }
+                catch (IOException) when (File.Exists(fullPath))
+                {
+                    // Another thread created this file - find a new unique name
+                    if (collisionCounter >= MaxCollisionAttempts)
+                    {
+                        throw new InvalidOperationException(
+                            $"Unable to find unique filename after {MaxCollisionAttempts} attempts: {filename}");
+                    }
+
+                    filename = FilenameSanitizer.GenerateEmlFilenameWithCounter(
+                        subject,
+                        receivedTime,
+                        collisionCounter,
+                        maxSubjectLength);
+
+                    fullPath = Path.Combine(fullDirectoryPath, filename);
+                    relativePath = Path.Combine(directoryPath, filename);
+                    collisionCounter++;
+                }
+            }
 
             _logger.Debug("Stored EML file: {0}", relativePath);
             return relativePath;

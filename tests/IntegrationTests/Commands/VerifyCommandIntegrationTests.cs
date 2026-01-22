@@ -9,30 +9,28 @@ namespace M365MailMirror.IntegrationTests.Commands;
 /// </summary>
 [Collection("IntegrationTests")]
 [Trait("Category", "Integration")]
-public class VerifyCommandIntegrationTests
+public class VerifyCommandIntegrationTests : IntegrationTestBase
 {
-    private readonly IntegrationTestFixture _fixture;
-    private readonly ITestOutputHelper _output;
-
     public VerifyCommandIntegrationTests(IntegrationTestFixture fixture, ITestOutputHelper output)
+        : base(fixture, output)
     {
-        _fixture = fixture;
-        _output = output;
     }
 
     #region Basic Verification Tests
 
     [SkippableFact]
+    [TestDescription("Verifies a healthy archive reports no integrity issues")]
     public async Task VerifyCommand_HealthyArchive_ReportsNoIssues()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath
         };
 
         // Act
@@ -43,19 +41,22 @@ public class VerifyCommandIntegrationTests
         stdout.Should().Contain("Verification complete");
         stdout.Should().Contain("No issues found");
         stdout.Should().Contain("Files checked:");
+        MarkCompleted();
     }
 
     [SkippableFact]
+    [TestDescription("Shows database, filesystem, and EML integrity check phases")]
     public async Task VerifyCommand_ShowsVerificationPhases()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath
         };
 
         // Act
@@ -66,6 +67,7 @@ public class VerifyCommandIntegrationTests
         stdout.Should().Contain("Checking database entries");
         stdout.Should().Contain("Scanning file system");
         stdout.Should().Contain("Checking EML file integrity");
+        MarkCompleted();
     }
 
     #endregion
@@ -73,17 +75,19 @@ public class VerifyCommandIntegrationTests
     #region Verbose Mode Tests
 
     [SkippableFact]
+    [TestDescription("Shows detailed verification output in verbose mode")]
     public async Task VerifyCommand_VerboseMode_ShowsDetailedOutput()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
-            Verbose = true
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Verbose = true // This test specifically tests verbose mode
         };
 
         // Act
@@ -93,6 +97,7 @@ public class VerifyCommandIntegrationTests
         var stdout = console.ReadOutputString();
         stdout.Should().Contain("Verification complete");
         stdout.Should().Contain("Files checked:");
+        MarkCompleted();
     }
 
     #endregion
@@ -100,12 +105,14 @@ public class VerifyCommandIntegrationTests
     #region Orphan Detection Tests
 
     [SkippableFact]
+    [TestDescription("Detects EML files not tracked in the database")]
     public async Task VerifyCommand_OrphanDetection_DetectsUntrackedFiles()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange - Create an orphaned EML file that's not in the database
-        var emlDir = Path.Combine(_fixture.TestOutputPath, "eml", "TestFolder", "2024", "01");
+        var emlDir = Path.Combine(Fixture.TestOutputPath, "eml", "TestFolder", "2024", "01");
         Directory.CreateDirectory(emlDir);
 
         var orphanPath = Path.Combine(emlDir, "orphan_test_message.eml");
@@ -117,12 +124,12 @@ public class VerifyCommandIntegrationTests
             "\r\n" +
             "This is an orphaned test message body.");
 
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
-            Verbose = true
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Verbose = Fixture.IsVerbose
         };
 
         // Act
@@ -131,6 +138,7 @@ public class VerifyCommandIntegrationTests
         // Assert
         var stdout = console.ReadOutputString();
         stdout.Should().Contain("Untracked files");
+        MarkCompleted();
     }
 
     #endregion
@@ -138,16 +146,18 @@ public class VerifyCommandIntegrationTests
     #region Fix Mode Tests
 
     [SkippableFact]
+    [TestDescription("Accepts the --fix flag for automatic repairs")]
     public async Task VerifyCommand_FixMode_AcceptsFixFlag()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Fix = true
         };
 
@@ -157,15 +167,18 @@ public class VerifyCommandIntegrationTests
         // Assert - Verify the command completes (fix mode is accepted)
         var stdout = console.ReadOutputString();
         stdout.Should().Contain("Verification complete");
+        MarkCompleted();
     }
 
     [SkippableFact]
+    [TestDescription("Applies fixes to orphaned or corrupted entries")]
     public async Task VerifyCommand_FixMode_AppliesFixes()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange - Create an orphaned EML file
-        var emlDir = Path.Combine(_fixture.TestOutputPath, "eml", "FixTestFolder", "2024", "01");
+        var emlDir = Path.Combine(Fixture.TestOutputPath, "eml", "FixTestFolder", "2024", "01");
         Directory.CreateDirectory(emlDir);
 
         var orphanPath = Path.Combine(emlDir, "fix_test_message.eml");
@@ -177,13 +190,13 @@ public class VerifyCommandIntegrationTests
             "\r\n" +
             "This is a test message for fix mode.");
 
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Fix = true,
-            Verbose = true
+            Verbose = Fixture.IsVerbose
         };
 
         // Act
@@ -194,6 +207,7 @@ public class VerifyCommandIntegrationTests
         stdout.Should().Contain("Verification complete");
         // Note: The verify command fixes missing files (db records without files)
         // but doesn't automatically add untracked files to the database
+        MarkCompleted();
     }
 
     #endregion
@@ -201,17 +215,19 @@ public class VerifyCommandIntegrationTests
     #region Error Case Tests
 
     [SkippableFact]
+    [TestDescription("Shows error when archive path doesn't exist")]
     public async Task VerifyCommand_NonExistentArchive_ShowsError()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange - Use a path that doesn't exist
-        var nonExistentPath = Path.Combine(_fixture.TestOutputPath, "nonexistent_archive");
+        var nonExistentPath = Path.Combine(Fixture.TestOutputPath, "nonexistent_archive");
 
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new VerifyCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
+            ConfigPath = Fixture.ConfigFilePath,
             ArchivePath = nonExistentPath
         };
 
@@ -228,6 +244,7 @@ public class VerifyCommandIntegrationTests
         // Assert - Error message should be in stderr (written by BaseCommand.DisplayError)
         var stderr = console.ReadErrorString();
         stderr.Should().Contain("does not exist");
+        MarkCompleted();
     }
 
     #endregion

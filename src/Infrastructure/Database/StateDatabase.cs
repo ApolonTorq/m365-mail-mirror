@@ -28,6 +28,11 @@ public class StateDatabase : IStateDatabase
     public const string DefaultDatabaseFilename = ".sync.db";
 
     /// <summary>
+    /// The subdirectory where the database is stored within the archive root.
+    /// </summary>
+    public const string DatabaseDirectory = "status";
+
+    /// <summary>
     /// Creates a new StateDatabase instance.
     /// </summary>
     /// <param name="databasePath">Full path to the database file.</param>

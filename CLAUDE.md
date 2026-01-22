@@ -154,17 +154,45 @@ See [README.md](README.md) for command usage and options.
 
 See [DESIGN.md](DESIGN.md) for detailed testing architecture, test project structure, and CI/CD configuration.
 
+### Running Integration Tests
+
+Integration tests require a configured Microsoft 365 tenant with cached authentication. Run them with:
+
+```bash
+# All platforms
+dotnet test tests/IntegrationTests/M365MailMirror.IntegrationTests.csproj
+
+# Run specific test class
+dotnet test tests/IntegrationTests/M365MailMirror.IntegrationTests.csproj --filter "FullyQualifiedName~SyncCommand"
+
+# Verbose output
+dotnet test tests/IntegrationTests/M365MailMirror.IntegrationTests.csproj -v n
+```
+
+**Prerequisites**:
+
+1. Copy [config-example.yaml](config-example.yaml) to `config.yaml` in the repository root
+2. Configure `clientId` (Azure AD app registration) and `mailbox` (target mailbox email)
+3. Run `dotnet run --project src/Cli auth login` to authenticate via device code flow
+
+The tests read authentication from `config.yaml` in the repository root. See [config-example.yaml](config-example.yaml) for all available options and Azure AD setup instructions.
+
+**Test settings file**: [tests/IntegrationTests/integration-test-settings.jsonc](tests/IntegrationTests/integration-test-settings.jsonc)
+
+```jsonc
+{
+  "logLevel": "info",        // Options: debug, info, warning, error, none
+  "logFileName": "integration-test.log"  // Set to null to disable file logging
+}
+```
+
+**Log file location**: `tests/IntegrationTests/output/status/integration-test.log`
+
+The log file contains detailed output from all test runs including sync progress, transformation results, and a summary of passed/failed tests. When diagnosing test failures, check this log for `ERR` entries and stack traces.
+
 ## Key Design Decisions
 
 See [decisions/](decisions/) for full Architecture Decision Records (ADRs):
-
-- **ADR-001: Microsoft Graph API** - Why Graph API over EWS/IMAP/Compliance Center
-- **ADR-002: Device Code Flow Authentication** - OAuth device code flow for headless environments
-- **ADR-003: EML-First Storage** - Canonical EML files with derived transformations
-- **ADR-004: SQLite for State Tracking** - File-based database for metadata indexing
-- **ADR-005: Quarantine Over Deletion** - Move deleted messages to quarantine instead of auto-delete
-- **ADR-006: Separate Transform Command** - Explicit offline transformation command
-- **ADR-007: ZIP Extraction and Executable Filtering** - Auto-extract safe ZIPs, block executables
 
 ## Technology Stack
 

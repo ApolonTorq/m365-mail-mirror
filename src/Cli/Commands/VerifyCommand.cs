@@ -44,8 +44,8 @@ public class VerifyCommand : BaseCommand
             throw new M365MailMirrorException($"Archive directory does not exist: {archiveRoot}", CliExitCodes.FileSystemError);
         }
 
-        // Check if database exists
-        var databasePath = Path.Combine(archiveRoot, StateDatabase.DefaultDatabaseFilename);
+        // Check if database exists in status subdirectory
+        var databasePath = Path.Combine(archiveRoot, StateDatabase.DatabaseDirectory, StateDatabase.DefaultDatabaseFilename);
         if (!File.Exists(databasePath))
         {
             throw new M365MailMirrorException($"No archive database found at: {databasePath}", CliExitCodes.FileSystemError);

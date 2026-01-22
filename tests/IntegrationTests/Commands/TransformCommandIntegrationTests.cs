@@ -9,30 +9,28 @@ namespace M365MailMirror.IntegrationTests.Commands;
 /// </summary>
 [Collection("IntegrationTests")]
 [Trait("Category", "Integration")]
-public class TransformCommandIntegrationTests
+public class TransformCommandIntegrationTests : IntegrationTestBase
 {
-    private readonly IntegrationTestFixture _fixture;
-    private readonly ITestOutputHelper _output;
-
     public TransformCommandIntegrationTests(IntegrationTestFixture fixture, ITestOutputHelper output)
+        : base(fixture, output)
     {
-        _fixture = fixture;
-        _output = output;
     }
 
     #region HTML Transformation Tests
 
     [SkippableFact]
+    [TestDescription("Generates HTML files from EML archive")]
     public async Task TransformCommand_HtmlGeneration_CreatesHtmlFiles()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = true,
             Markdown = false,
             Attachments = false,
@@ -47,11 +45,12 @@ public class TransformCommandIntegrationTests
         stdout.Should().Contain("Transformation completed");
 
         // Verify HTML files created
-        var htmlDirectory = Path.Combine(_fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
         Directory.Exists(htmlDirectory).Should().BeTrue("HTML directory should be created");
 
         var htmlFiles = Directory.GetFiles(htmlDirectory, "*.html", SearchOption.AllDirectories);
         htmlFiles.Should().NotBeEmpty("At least one HTML file should be generated");
+        MarkCompleted();
     }
 
     #endregion
@@ -59,16 +58,18 @@ public class TransformCommandIntegrationTests
     #region Markdown Transformation Tests
 
     [SkippableFact]
+    [TestDescription("Generates Markdown files from EML archive")]
     public async Task TransformCommand_MarkdownGeneration_CreatesMarkdownFiles()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = false,
             Markdown = true,
             Attachments = false,
@@ -83,11 +84,12 @@ public class TransformCommandIntegrationTests
         stdout.Should().Contain("Transformation completed");
 
         // Verify Markdown files created
-        var mdDirectory = Path.Combine(_fixture.TestOutputPath, "markdown");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
         Directory.Exists(mdDirectory).Should().BeTrue("Markdown directory should be created");
 
         var mdFiles = Directory.GetFiles(mdDirectory, "*.md", SearchOption.AllDirectories);
         mdFiles.Should().NotBeEmpty("At least one Markdown file should be generated");
+        MarkCompleted();
     }
 
     #endregion
@@ -95,16 +97,18 @@ public class TransformCommandIntegrationTests
     #region Attachment Extraction Tests
 
     [SkippableFact]
+    [TestDescription("Extracts attachments from emails")]
     public async Task TransformCommand_AttachmentExtraction_RunsSuccessfully()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = false,
             Markdown = false,
             Attachments = true,
@@ -120,6 +124,7 @@ public class TransformCommandIntegrationTests
 
         // Note: We can't assert attachment existence without knowing if test emails have attachments
         // The test verifies the command completes successfully
+        MarkCompleted();
     }
 
     #endregion
@@ -127,16 +132,18 @@ public class TransformCommandIntegrationTests
     #region Force Mode Tests
 
     [SkippableFact]
+    [TestDescription("Regenerates all transformations with --force flag")]
     public async Task TransformCommand_ForceMode_RegeneratesAllTransformations()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange - First transform
-        using var console1 = new TestConsoleWrapper(_output);
+        using var console1 = CreateTestConsole();
         var command1 = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = true,
             Markdown = false,
             Attachments = false
@@ -147,11 +154,11 @@ public class TransformCommandIntegrationTests
         stdout1.Should().Contain("Transformation completed");
 
         // Arrange - Second transform with force
-        using var console2 = new TestConsoleWrapper(_output);
+        using var console2 = CreateTestConsole();
         var command2 = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = true,
             Markdown = false,
             Attachments = false,
@@ -165,6 +172,7 @@ public class TransformCommandIntegrationTests
         var stdout2 = console2.ReadOutputString();
         stdout2.Should().Contain("Force mode");
         stdout2.Should().Contain("Transformation completed");
+        MarkCompleted();
     }
 
     #endregion
@@ -172,16 +180,18 @@ public class TransformCommandIntegrationTests
     #region Only Filter Tests
 
     [SkippableFact]
+    [TestDescription("Generates only HTML when --only html is specified")]
     public async Task TransformCommand_OnlyHtml_OnlyGeneratesHtml()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Only = "html",
             Force = true // Force to ensure regeneration
         };
@@ -193,6 +203,7 @@ public class TransformCommandIntegrationTests
         var stdout = console.ReadOutputString();
         stdout.Should().Contain("Only: html");
         stdout.Should().Contain("Transformation completed");
+        MarkCompleted();
     }
 
     #endregion
@@ -200,16 +211,18 @@ public class TransformCommandIntegrationTests
     #region All Transformations Tests
 
     [SkippableFact]
+    [TestDescription("Generates HTML, Markdown, and extracts attachments together")]
     public async Task TransformCommand_AllTransformations_GeneratesAllFormats()
     {
-        _fixture.SkipIfNotAuthenticated();
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
 
         // Arrange
-        using var console = new TestConsoleWrapper(_output);
+        using var console = CreateTestConsole();
         var command = new TransformCommand
         {
-            ConfigPath = _fixture.ConfigFilePath,
-            ArchivePath = _fixture.TestOutputPath,
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
             Html = true,
             Markdown = true,
             Attachments = true,
@@ -224,11 +237,12 @@ public class TransformCommandIntegrationTests
         stdout.Should().Contain("Transformation completed");
 
         // Verify both HTML and Markdown directories exist
-        var htmlDirectory = Path.Combine(_fixture.TestOutputPath, "html");
-        var mdDirectory = Path.Combine(_fixture.TestOutputPath, "markdown");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
 
         Directory.Exists(htmlDirectory).Should().BeTrue("HTML directory should be created");
         Directory.Exists(mdDirectory).Should().BeTrue("Markdown directory should be created");
+        MarkCompleted();
     }
 
     #endregion

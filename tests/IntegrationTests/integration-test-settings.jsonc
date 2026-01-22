@@ -1,0 +1,6 @@
+{
+  // Log level options: debug, info, warning, error, none
+  "logLevel": "info",
+  // Log file name in output/status folder. Remove or set to null to disable file logging.
+  "logFileName": "integration-test.log"
+}

@@ -122,8 +122,10 @@ public class SyncCommand : BaseCommand
         var graphClient = new GraphServiceClient(tokenCredential);
         var graphMailClient = new GraphMailClient(graphClient, logger);
 
-        // Create database
-        var databasePath = Path.Combine(archiveRoot, StateDatabase.DefaultDatabaseFilename);
+        // Create database in status subdirectory
+        var statusDir = Path.Combine(archiveRoot, StateDatabase.DatabaseDirectory);
+        Directory.CreateDirectory(statusDir);
+        var databasePath = Path.Combine(statusDir, StateDatabase.DefaultDatabaseFilename);
         await using var database = new StateDatabase(databasePath, logger);
         await database.InitializeAsync(cancellationToken);
 

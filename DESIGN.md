@@ -105,7 +105,7 @@ graph LR
 
 - **Package**: `Microsoft.Data.Sqlite`
 - **Purpose**: Embedded SQL database for state tracking
-- **File**: `.sync.db` in archive root
+- **File**: `status/.sync.db` in archive root
 
 #### Configuration
 
@@ -214,7 +214,8 @@ See [ADR-003: EML-First Storage with Configurable Transformations](decisions/adr
 
 ```
 <mail-root>/
-├── .sync.db                          # SQLite state database
+├── status/                           # Status and state tracking
+│   └── .sync.db                      # SQLite state database
 ├── eml/                              # Canonical EML files
 │   ├── Inbox/
 │   │   ├── 2024/

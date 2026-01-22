@@ -5,7 +5,7 @@ namespace M365MailMirror.IntegrationTests;
 
 /// <summary>
 /// An IConsole implementation that captures output for assertions while also
-/// forwarding all writes in real-time to the actual console.
+/// forwarding all writes in real-time to the actual console and optionally to a log file.
 /// Uses the decorator pattern via TeeStream.
 /// </summary>
 public class ForwardingTestConsole : IConsole, IDisposable
@@ -18,7 +18,8 @@ public class ForwardingTestConsole : IConsole, IDisposable
     /// Creates a console that captures output and forwards to the real console.
     /// </summary>
     /// <param name="forwardToConsole">If true, forwards output to Console.Out/Error in real-time.</param>
-    public ForwardingTestConsole(bool forwardToConsole = true)
+    /// <param name="logFileStream">Optional stream to also write all output to (e.g., for log files).</param>
+    public ForwardingTestConsole(bool forwardToConsole = true, Stream? logFileStream = null)
     {
         _inputStream = new MemoryStream();
         _outputCapture = new MemoryStream();
@@ -29,13 +30,33 @@ public class ForwardingTestConsole : IConsole, IDisposable
 
         if (forwardToConsole)
         {
-            outputStream = new TeeStream(_outputCapture, Console.OpenStandardOutput());
-            errorStream = new TeeStream(_errorCapture, Console.OpenStandardError());
+            var outputSecondaries = new List<Stream> { Console.OpenStandardOutput() };
+            var errorSecondaries = new List<Stream> { Console.OpenStandardError() };
+
+            if (logFileStream != null)
+            {
+                // Wrap to prevent TeeStream from disposing the shared log file stream
+                var nonDisposing = new NonDisposingStream(logFileStream);
+                outputSecondaries.Add(nonDisposing);
+                errorSecondaries.Add(nonDisposing);
+            }
+
+            outputStream = new TeeStream(_outputCapture, outputSecondaries.ToArray());
+            errorStream = new TeeStream(_errorCapture, errorSecondaries.ToArray());
         }
         else
         {
-            outputStream = _outputCapture;
-            errorStream = _errorCapture;
+            if (logFileStream != null)
+            {
+                var nonDisposing = new NonDisposingStream(logFileStream);
+                outputStream = new TeeStream(_outputCapture, nonDisposing);
+                errorStream = new TeeStream(_errorCapture, nonDisposing);
+            }
+            else
+            {
+                outputStream = _outputCapture;
+                errorStream = _errorCapture;
+            }
         }
 
         Input = new ConsoleReader(this, _inputStream);

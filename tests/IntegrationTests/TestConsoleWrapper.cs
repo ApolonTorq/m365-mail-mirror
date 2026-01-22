@@ -18,9 +18,10 @@ public class TestConsoleWrapper : IDisposable
     /// </summary>
     /// <param name="output">Optional xUnit test output helper for test result logging.</param>
     /// <param name="forwardToConsole">If true (default), forwards output to real console in real-time.</param>
-    public TestConsoleWrapper(ITestOutputHelper? output = null, bool forwardToConsole = true)
+    /// <param name="logFileStream">Optional stream to also write all output to (e.g., for log files).</param>
+    public TestConsoleWrapper(ITestOutputHelper? output = null, bool forwardToConsole = true, Stream? logFileStream = null)
     {
-        _console = new ForwardingTestConsole(forwardToConsole);
+        _console = new ForwardingTestConsole(forwardToConsole, logFileStream);
         _output = output;
     }
 

@@ -40,8 +40,8 @@ public class StatusCommand : BaseCommand
             return;
         }
 
-        // Check if database exists
-        var databasePath = Path.Combine(archiveRoot, StateDatabase.DefaultDatabaseFilename);
+        // Check if database exists in status subdirectory
+        var databasePath = Path.Combine(archiveRoot, StateDatabase.DatabaseDirectory, StateDatabase.DefaultDatabaseFilename);
         if (!File.Exists(databasePath))
         {
             await WriteWarningAsync(console, $"No archive database found at: {databasePath}");
