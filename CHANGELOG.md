@@ -15,6 +15,7 @@ Feature completion is tracked with checkboxes:
 
 ### Added
 
+- [x] **Index files and breadcrumb navigation**: Generates `index.html` and `index.md` files at each folder level (root, mail folders, years, months) for archive navigation. All pages (index files and individual emails) include clickable breadcrumb navigation showing the path hierarchy (Archive > Folder > Year > Month > Subject). Index generation runs automatically after sync and transform commands complete.
 - [x] **Streaming sync with checkpointing** (ADR-008): Per-message checkpointing via `--checkpoint-interval`, `FolderSyncProgress` entity, database schema v2 with `folder_sync_progress` table
 - [x] **AAD throttling mitigation** (ADR-009): Token caching with 5-min proactive refresh, exponential backoff retries, local-only cache reads for `GetStatusAsync`
 - [x] **Inline transformation during sync**: `--html`, `--markdown`, `--attachments` flags work during sync via `TransformSingleMessageAsync`
@@ -34,6 +35,7 @@ Feature completion is tracked with checkboxes:
 ### Fixed
 
 - [x] Thread-safe database disposal with proper locking to prevent race conditions during async cleanup
+- [x] Index file month links now use numeric folder names (e.g., `01/index.html`) instead of month names (`January/index.html`) to match actual directory structure
 
 ## [0.1.0] - Initial Release
 

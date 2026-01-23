@@ -226,6 +226,31 @@ public class SyncCommand : BaseCommand
             }
         }, cancellationToken);
 
+        // Generate navigation indexes if any transformations were enabled
+        if ((GenerateHtml || GenerateMarkdown) && result.Success && result.MessagesSynced > 0)
+        {
+            await console.Output.WriteLineAsync();
+            await console.Output.WriteLineAsync("Generating navigation indexes...");
+
+            var indexService = new IndexGenerationService(database, archiveRoot, logger);
+            var indexResult = await indexService.GenerateIndexesAsync(
+                new IndexGenerationOptions
+                {
+                    GenerateHtmlIndexes = GenerateHtml,
+                    GenerateMarkdownIndexes = GenerateMarkdown
+                },
+                cancellationToken);
+
+            if (indexResult.Success)
+            {
+                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes, {indexResult.MarkdownIndexesGenerated} Markdown indexes");
+            }
+            else
+            {
+                await WriteWarningAsync(console, $"Index generation failed: {indexResult.ErrorMessage}");
+            }
+        }
+
         // Display results
         await console.Output.WriteLineAsync();
 

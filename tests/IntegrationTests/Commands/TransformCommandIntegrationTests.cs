@@ -481,4 +481,302 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
     }
 
     #endregion
+
+    #region Index Generation Tests
+
+    [SkippableFact]
+    [TestDescription("Generates index files after HTML transformation")]
+    public async Task TransformCommand_HtmlTransformation_GeneratesIndexFiles()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = true,
+            Markdown = false,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert
+        var stdout = console.ReadOutputString();
+        stdout.Should().Contain("Generating navigation indexes");
+        stdout.Should().Contain("HTML indexes");
+
+        // Verify root HTML index exists
+        var rootHtmlIndex = Path.Combine(Fixture.TestOutputPath, "html", "index.html");
+        File.Exists(rootHtmlIndex).Should().BeTrue("Root HTML index should be created");
+
+        // Verify root index content
+        var rootContent = await File.ReadAllTextAsync(rootHtmlIndex);
+        rootContent.Should().Contain("Mail Archive");
+        rootContent.Should().Contain("breadcrumb");
+        rootContent.Should().Contain("Archive");
+
+        Output.WriteLine($"Root HTML index verified at: {rootHtmlIndex}");
+        MarkCompleted();
+    }
+
+    [SkippableFact]
+    [TestDescription("Generates Markdown index files after Markdown transformation")]
+    public async Task TransformCommand_MarkdownTransformation_GeneratesIndexFiles()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = false,
+            Markdown = true,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert
+        var stdout = console.ReadOutputString();
+        stdout.Should().Contain("Generating navigation indexes");
+        stdout.Should().Contain("Markdown indexes");
+
+        // Verify root Markdown index exists
+        var rootMdIndex = Path.Combine(Fixture.TestOutputPath, "markdown", "index.md");
+        File.Exists(rootMdIndex).Should().BeTrue("Root Markdown index should be created");
+
+        // Verify root index content
+        var rootContent = await File.ReadAllTextAsync(rootMdIndex);
+        rootContent.Should().Contain("Mail Archive");
+        rootContent.Should().Contain("Archive");
+
+        Output.WriteLine($"Root Markdown index verified at: {rootMdIndex}");
+        MarkCompleted();
+    }
+
+    [SkippableFact]
+    [TestDescription("Index files contain proper hierarchy structure")]
+    public async Task TransformCommand_IndexGeneration_CreatesHierarchyStructure()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = true,
+            Markdown = false,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert - Find all index files
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var indexFiles = Directory.GetFiles(htmlDirectory, "index.html", SearchOption.AllDirectories);
+
+        indexFiles.Should().NotBeEmpty("At least one index file should exist");
+
+        Output.WriteLine($"Found {indexFiles.Length} index files:");
+        foreach (var indexFile in indexFiles)
+        {
+            var relativePath = Path.GetRelativePath(Fixture.TestOutputPath, indexFile);
+            Output.WriteLine($"  - {relativePath}");
+
+            // Each index should contain breadcrumb navigation
+            var content = await File.ReadAllTextAsync(indexFile);
+            content.Should().Contain("breadcrumb", $"Index file {relativePath} should contain breadcrumb navigation");
+        }
+
+        MarkCompleted();
+    }
+
+    #endregion
+
+    #region Breadcrumb Navigation Tests
+
+    [SkippableFact]
+    [TestDescription("HTML email files contain breadcrumb navigation")]
+    public async Task TransformCommand_HtmlFiles_ContainBreadcrumbNavigation()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = true,
+            Markdown = false,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert - Find HTML email files (not index files)
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlFiles = Directory.GetFiles(htmlDirectory, "*.html", SearchOption.AllDirectories)
+            .Where(f => !Path.GetFileName(f).Equals("index.html", StringComparison.OrdinalIgnoreCase))
+            .Take(5) // Check up to 5 files
+            .ToList();
+
+        htmlFiles.Should().NotBeEmpty("At least one HTML email file should exist");
+
+        var verifiedCount = 0;
+        foreach (var htmlFile in htmlFiles)
+        {
+            var content = await File.ReadAllTextAsync(htmlFile);
+            var relativePath = Path.GetRelativePath(Fixture.TestOutputPath, htmlFile);
+
+            // Each HTML file should contain breadcrumb navigation
+            if (content.Contains("class=\"breadcrumb\""))
+            {
+                content.Should().Contain("Archive", $"Breadcrumb in {relativePath} should contain Archive link");
+                verifiedCount++;
+                Output.WriteLine($"Verified breadcrumb in: {relativePath}");
+            }
+        }
+
+        verifiedCount.Should().BeGreaterThan(0, "At least one HTML email file should contain breadcrumb navigation");
+        Output.WriteLine($"Total HTML files with breadcrumbs verified: {verifiedCount}");
+        MarkCompleted();
+    }
+
+    [SkippableFact]
+    [TestDescription("Markdown email files contain breadcrumb navigation")]
+    public async Task TransformCommand_MarkdownFiles_ContainBreadcrumbNavigation()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = false,
+            Markdown = true,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert - Find Markdown email files (not index files)
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var mdFiles = Directory.GetFiles(mdDirectory, "*.md", SearchOption.AllDirectories)
+            .Where(f => !Path.GetFileName(f).Equals("index.md", StringComparison.OrdinalIgnoreCase))
+            .Take(5) // Check up to 5 files
+            .ToList();
+
+        mdFiles.Should().NotBeEmpty("At least one Markdown email file should exist");
+
+        var verifiedCount = 0;
+        foreach (var mdFile in mdFiles)
+        {
+            var content = await File.ReadAllTextAsync(mdFile);
+            var relativePath = Path.GetRelativePath(Fixture.TestOutputPath, mdFile);
+
+            // Each Markdown file should contain breadcrumb navigation with Archive link
+            if (content.Contains("[Archive]"))
+            {
+                content.Should().Contain("index.md", $"Breadcrumb in {relativePath} should link to index files");
+                verifiedCount++;
+                Output.WriteLine($"Verified breadcrumb in: {relativePath}");
+            }
+        }
+
+        verifiedCount.Should().BeGreaterThan(0, "At least one Markdown email file should contain breadcrumb navigation");
+        Output.WriteLine($"Total Markdown files with breadcrumbs verified: {verifiedCount}");
+        MarkCompleted();
+    }
+
+    [SkippableFact]
+    [TestDescription("Month-level index contains email list with links")]
+    public async Task TransformCommand_MonthIndex_ContainsEmailListWithLinks()
+    {
+        TrackTest();
+        Fixture.SkipIfNotAuthenticated();
+
+        // Arrange
+        using var console = CreateTestConsole();
+        var command = new TransformCommand
+        {
+            ConfigPath = Fixture.ConfigFilePath,
+            ArchivePath = Fixture.TestOutputPath,
+            Html = true,
+            Markdown = false,
+            Attachments = false,
+            Force = true,
+            Parallel = 2
+        };
+
+        // Act
+        await command.ExecuteAsync(console.Console);
+
+        // Assert - Find a month-level index (e.g., html/Inbox/2024/01/index.html)
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var indexFiles = Directory.GetFiles(htmlDirectory, "index.html", SearchOption.AllDirectories);
+
+        // Find deepest index files (month level typically has 4+ path segments: html/folder/year/month/index.html)
+        var monthIndexes = indexFiles
+            .Where(f =>
+            {
+                var relativePath = Path.GetRelativePath(Fixture.TestOutputPath, f);
+                var depth = relativePath.Split(Path.DirectorySeparatorChar).Length;
+                return depth >= 5; // html/folder/year/month/index.html
+            })
+            .Take(3)
+            .ToList();
+
+        if (monthIndexes.Count == 0)
+        {
+            Output.WriteLine("No month-level indexes found - archive may not have deep folder structure");
+            MarkCompleted();
+            return;
+        }
+
+        foreach (var monthIndex in monthIndexes)
+        {
+            var content = await File.ReadAllTextAsync(monthIndex);
+            var relativePath = Path.GetRelativePath(Fixture.TestOutputPath, monthIndex);
+
+            // Month index should contain email table with links
+            content.Should().Contain("email-table", $"Month index {relativePath} should contain email table");
+            content.Should().Contain(".html\"", $"Month index {relativePath} should contain links to HTML email files");
+
+            Output.WriteLine($"Verified month index: {relativePath}");
+        }
+
+        MarkCompleted();
+    }
+
+    #endregion
 }

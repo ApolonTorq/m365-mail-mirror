@@ -110,6 +110,31 @@ public class TransformCommand : BaseCommand
             }
         }, cancellationToken);
 
+        // Generate navigation indexes after transformation
+        if ((Html || Markdown) && result.Success)
+        {
+            await console.Output.WriteLineAsync();
+            await console.Output.WriteLineAsync("Generating navigation indexes...");
+
+            var indexService = new IndexGenerationService(database, archiveRoot, logger);
+            var indexResult = await indexService.GenerateIndexesAsync(
+                new IndexGenerationOptions
+                {
+                    GenerateHtmlIndexes = Html,
+                    GenerateMarkdownIndexes = Markdown
+                },
+                cancellationToken);
+
+            if (indexResult.Success)
+            {
+                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes, {indexResult.MarkdownIndexesGenerated} Markdown indexes");
+            }
+            else
+            {
+                await WriteWarningAsync(console, $"Index generation failed: {indexResult.ErrorMessage}");
+            }
+        }
+
         // Display results
         await console.Output.WriteLineAsync();
 

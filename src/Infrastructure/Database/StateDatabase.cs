@@ -573,6 +573,89 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         return Convert.ToInt64(result, CultureInfo.InvariantCulture);
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetDistinctFolderPathsAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT folder_path
+            FROM messages
+            WHERE quarantined_at IS NULL
+            ORDER BY folder_path";
+
+        var folders = new List<string>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            folders.Add(reader.GetString(0));
+        }
+
+        return folders;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<(int Year, int Month)>> GetDistinctYearMonthsForFolderAsync(
+        string folderPath,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT
+                CAST(strftime('%Y', received_time) AS INTEGER) as year,
+                CAST(strftime('%m', received_time) AS INTEGER) as month
+            FROM messages
+            WHERE folder_path = @folderPath AND quarantined_at IS NULL
+            ORDER BY year DESC, month DESC";
+        cmd.Parameters.AddWithValue("@folderPath", folderPath);
+
+        var yearMonths = new List<(int Year, int Month)>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            yearMonths.Add((reader.GetInt32(0), reader.GetInt32(1)));
+        }
+
+        return yearMonths;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Message>> GetMessagesForIndexAsync(
+        string folderPath,
+        int year,
+        int month,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                   received_time, size, has_attachments, in_reply_to, conversation_id,
+                   quarantined_at, quarantine_reason, created_at, updated_at
+            FROM messages
+            WHERE folder_path = @folderPath
+              AND quarantined_at IS NULL
+              AND CAST(strftime('%Y', received_time) AS INTEGER) = @year
+              AND CAST(strftime('%m', received_time) AS INTEGER) = @month
+            ORDER BY received_time DESC";
+        cmd.Parameters.AddWithValue("@folderPath", folderPath);
+        cmd.Parameters.AddWithValue("@year", year);
+        cmd.Parameters.AddWithValue("@month", month);
+
+        var messages = new List<Message>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            messages.Add(ReadMessage(reader));
+        }
+
+        return messages;
+    }
+
     private static Message ReadMessage(SqliteDataReader reader)
     {
         return new Message

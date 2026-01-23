@@ -25,8 +25,9 @@ public class TransformationService : ITransformationService
     /// <summary>
     /// Current configuration version for transformations.
     /// Change this when transformation logic changes.
+    /// v2: Added breadcrumb navigation to HTML and Markdown outputs.
     /// </summary>
-    public const string CurrentConfigVersion = "v1";
+    public const string CurrentConfigVersion = "v2";
 
     /// <summary>
     /// Creates a new TransformationService.
@@ -284,8 +285,8 @@ public class TransformationService : ITransformationService
         // Fetch attachments for this message to include links in the output
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
-        // Generate HTML with attachment links
-        var html = GenerateHtml(mimeMessage, outputPath, attachments);
+        // Generate HTML with attachment links and breadcrumb navigation
+        var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath);
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
@@ -307,8 +308,8 @@ public class TransformationService : ITransformationService
         // Fetch attachments for this message to include links in the output
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
-        // Generate Markdown with attachment links
-        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments);
+        // Generate Markdown with attachment links and breadcrumb navigation
+        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath);
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
@@ -504,7 +505,7 @@ public class TransformationService : ITransformationService
             receivedTime.Month.ToString("D2", CultureInfo.InvariantCulture));
     }
 
-    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments)
+    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath)
     {
         var body = message.HtmlBody ?? message.TextBody ?? "";
 
@@ -527,6 +528,9 @@ public class TransformationService : ITransformationService
         // Build attachments section
         var attachmentsSection = GenerateAttachmentsHtml(outputPath, attachments);
 
+        // Build breadcrumb navigation
+        var breadcrumb = BreadcrumbHelper.GenerateHtmlBreadcrumb(outputPath, message.Subject ?? "(no subject)");
+
         return $@"<!DOCTYPE html>
 <html lang=""en"">
 <head>
@@ -535,6 +539,10 @@ public class TransformationService : ITransformationService
     <title>{System.Net.WebUtility.HtmlEncode(message.Subject ?? "(no subject)")}</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; max-width: 800px; }}
+        .breadcrumb {{ padding: 10px 15px; margin-bottom: 15px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0; font-size: 0.9em; border-radius: 5px; }}
+        .breadcrumb a {{ color: #0078d4; text-decoration: none; }}
+        .breadcrumb a:hover {{ text-decoration: underline; }}
+        .breadcrumb .current {{ color: #666; }}
         .header {{ background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-radius: 5px; }}
         .header h1 {{ margin: 0 0 10px 0; font-size: 1.2em; }}
         .header .meta {{ color: #666; font-size: 0.9em; }}
@@ -548,6 +556,7 @@ public class TransformationService : ITransformationService
     </style>
 </head>
 <body>
+    {breadcrumb}
     <div class=""header"">
         <h1>{System.Net.WebUtility.HtmlEncode(message.Subject ?? "(no subject)")}</h1>
         <div class=""meta"">
@@ -563,7 +572,7 @@ public class TransformationService : ITransformationService
 </html>";
     }
 
-    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments)
+    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath)
     {
         var textBody = message.TextBody ?? "";
 
@@ -592,12 +601,17 @@ public class TransformationService : ITransformationService
         // Build attachments section
         var attachmentsSection = GenerateAttachmentsMarkdown(outputPath, attachments);
 
+        // Build breadcrumb navigation
+        var breadcrumb = BreadcrumbHelper.GenerateMarkdownBreadcrumb(outputPath, message.Subject ?? "(no subject)");
+
         return $@"---
 subject: ""{EscapeYamlString(message.Subject ?? "")}""
 from: ""{EscapeYamlString(message.From?.ToString() ?? "")}""
 to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
 {ccFrontMatter}{bccFrontMatter}date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
 ---
+
+{breadcrumb}
 
 # {message.Subject ?? "(no subject)"}
 

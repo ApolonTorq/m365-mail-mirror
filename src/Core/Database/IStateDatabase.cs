@@ -92,6 +92,34 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     /// </summary>
     Task<long> GetMessageCountByFolderAsync(string folderPath, CancellationToken cancellationToken = default);
 
+    // Index Generation Queries
+
+    /// <summary>
+    /// Gets distinct folder paths from non-quarantined messages.
+    /// Used for building the folder hierarchy in index generation.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetDistinctFolderPathsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets distinct year-month combinations for a folder.
+    /// Used for building year/month navigation in index generation.
+    /// </summary>
+    /// <param name="folderPath">The folder path to query.</param>
+    /// <returns>List of (year, month) tuples sorted descending.</returns>
+    Task<IReadOnlyList<(int Year, int Month)>> GetDistinctYearMonthsForFolderAsync(
+        string folderPath,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets messages for a specific folder, year, and month for index generation.
+    /// Returns non-quarantined messages sorted by received time descending.
+    /// </summary>
+    Task<IReadOnlyList<Message>> GetMessagesForIndexAsync(
+        string folderPath,
+        int year,
+        int month,
+        CancellationToken cancellationToken = default);
+
     // Folder Operations
 
     /// <summary>
