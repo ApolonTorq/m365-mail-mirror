@@ -15,6 +15,7 @@ Feature completion is tracked with checkboxes:
 
 ### Added
 
+- [x] **Glob pattern support for folder exclusions**: The `excludeFolders` config and `--exclude` CLI option now support glob patterns: `*` for single-segment wildcards (e.g., `Inbox/Azure*`), `/*` for immediate children only (e.g., `Robots/*`), `/**` for all descendants (e.g., `Archive/**`), and `**/` prefix for matching at any depth (e.g., `**/Old*`). Matching is case-insensitive.
 - [x] **Index files and breadcrumb navigation**: Generates `index.html` and `index.md` files at each folder level (root, mail folders, years, months) for archive navigation. All pages (index files and individual emails) include clickable breadcrumb navigation showing the path hierarchy (Archive > Folder > Year > Month > Subject). Index generation runs automatically after sync and transform commands complete.
 - [x] **Streaming sync with checkpointing** (ADR-008): Per-message checkpointing via `--checkpoint-interval`, `FolderSyncProgress` entity, database schema v2 with `folder_sync_progress` table
 - [x] **AAD throttling mitigation** (ADR-009): Token caching with 5-min proactive refresh, exponential backoff retries, local-only cache reads for `GetStatusAsync`

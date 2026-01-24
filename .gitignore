@@ -424,7 +424,7 @@ nul
 
 # Allows a local output and dev config file to live in the repo but be ignored by git
 .output/
-config.yaml
+config*.yaml
 
 # Integration test output
 tests/IntegrationTests/output/

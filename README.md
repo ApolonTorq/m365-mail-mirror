@@ -197,7 +197,7 @@ When HTML or Markdown generation is enabled alongside attachment extraction, the
 <div class="attachments">
     <strong>Attachments:</strong>
     <ul>
-        <li><a href="../../../../attachments/Inbox/2024/01/Meeting_attachments/report.pdf">report.pdf</a> (1.2 MB)</li>
+        <li><a href="attachments/Meeting_attachments/report.pdf">report.pdf</a> (1.2 MB)</li>
     </ul>
 </div>
 ```
@@ -206,7 +206,7 @@ When HTML or Markdown generation is enabled alongside attachment extraction, the
 
 ```markdown
 **Attachments:**
-- [report.pdf](../../../../attachments/Inbox/2024/01/Meeting_attachments/report.pdf) (1.2 MB)
+- [report.pdf](attachments/Meeting_attachments/report.pdf) (1.2 MB)
 ```
 
 **Key behaviors**:
@@ -248,8 +248,20 @@ m365-mail-mirror sync --checkpoint-interval 20 --parallel 10
 
 - `--checkpoint-interval <n>`: Messages between checkpoints (default: 10)
 - `--parallel <n>`: Concurrent downloads (default: 5)
-- `--exclude <pattern>`: Skip folders matching glob pattern (can specify multiple)
+- `--exclude <pattern>`: Skip folders matching glob pattern (can specify multiple, see below)
 - `--dry-run`: Show what would be synced without downloading
+
+**Folder Exclusion Patterns**:
+
+| Pattern | Meaning |
+|---------|---------|
+| `"Inbox"` | Folder and all descendants |
+| `"Inbox/Azure*"` | Folders starting with "Azure" under Inbox |
+| `"Archive/*"` | Immediate children of Archive only |
+| `"Archive/**"` | All descendants of Archive (not Archive itself) |
+| `"**/Old*"` | Any folder starting with "Old" at any depth |
+
+All pattern matching is case-insensitive.
 
 ### `transform` - Regenerate Outputs from EML Files
 

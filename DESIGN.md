@@ -365,13 +365,13 @@ See [ADR-003](decisions/adr-003-eml-first-storage-with-transformations.md) and [
     <footer class="attachments">
         <h3>Attachments</h3>
         <ul>
-            <li><a href="../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/document.pdf">document.pdf</a> (524 KB)</li>
+            <li><a href="attachments/Meeting_Notes_1030_attachments/document.pdf">document.pdf</a> (524 KB)</li>
             <li>
-                <a href="../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip">report.zip</a> (1.2 MB)
+                <a href="attachments/Meeting_Notes_1030_attachments/report.zip">report.zip</a> (1.2 MB)
                 <ul class="zip-contents">
-                    <li><a href="../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/summary.txt">summary.txt</a></li>
-                    <li><a href="../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/data/january.csv">data/january.csv</a></li>
-                    <li><a href="../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/data/february.csv">data/february.csv</a></li>
+                    <li><a href="attachments/Meeting_Notes_1030_attachments/report.zip_extracted/summary.txt">summary.txt</a></li>
+                    <li><a href="attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/january.csv">data/january.csv</a></li>
+                    <li><a href="attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/february.csv">data/february.csv</a></li>
                     <li><em>... and 5 more files</em></li>
                 </ul>
             </li>
@@ -430,12 +430,12 @@ Email body converted to Markdown...
 
 ## Attachments
 
-- [document.pdf](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/document.pdf) (524 KB)
-- [report.zip](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip) (1.2 MB)
-  - Extracted contents: [report.zip_extracted/](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/)
-    - [summary.txt](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/summary.txt)
-    - [data/january.csv](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/data/january.csv)
-    - [data/february.csv](../../attachments/Inbox/2024/01/Meeting_Notes_1030_attachments/report.zip_extracted/data/february.csv)
+- [document.pdf](attachments/Meeting_Notes_1030_attachments/document.pdf) (524 KB)
+- [report.zip](attachments/Meeting_Notes_1030_attachments/report.zip) (1.2 MB)
+  - Extracted contents: [report.zip_extracted/](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/)
+    - [summary.txt](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/summary.txt)
+    - [data/january.csv](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/january.csv)
+    - [data/february.csv](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/february.csv)
     - ... and 5 more files
 - ⚠️ setup.exe.skipped (executable file not extracted for security)
 ```
@@ -461,7 +461,7 @@ Email body converted to Markdown...
 **Folder structure**:
 
 ```
-attachments/{folder}/{YYYY}/{MM}/{message}_attachments/
+transformed/{folder}/{YYYY}/{MM}/attachments/{message}_attachments/
 ├── document.pdf
 ├── spreadsheet.xlsx
 ├── image.png
@@ -580,7 +580,7 @@ zip_extraction:
 **Extraction folder structure**:
 
 ```
-attachments/Inbox/2024/01/Message_1030_attachments/
+transformed/Inbox/2024/01/attachments/Message_1030_attachments/
 ├── report.zip                     # Original ZIP (always kept)
 ├── report.zip_extracted/          # Extracted contents
 │   ├── summary.txt
@@ -625,8 +625,8 @@ bool IsSafePath(string zipEntryPath)
 **Logging examples**:
 
 ```
-[INFO] Extracted ZIP: report.zip (15 files) - attachments/Inbox/2024/01/Message_1030_attachments/report.zip_extracted/
-[WARN] Skipped encrypted ZIP: passwords.zip - attachments/Inbox/2024/01/Message_1030_attachments/passwords.zip
+[INFO] Extracted ZIP: report.zip (15 files) - transformed/Inbox/2024/01/attachments/Message_1030_attachments/report.zip_extracted/
+[WARN] Skipped encrypted ZIP: passwords.zip - transformed/Inbox/2024/01/attachments/Message_1030_attachments/passwords.zip
 [WARN] Skipped ZIP with unsafe paths: malicious.zip (contains ../../../etc/passwd)
 [WARN] Skipped ZIP with executables: installer.zip (contains setup.exe)
 [WARN] Skipped large ZIP: archive.zip (1,523 files exceeds max_files: 100)
@@ -847,7 +847,7 @@ Delta query indicates deletion:
 2. Move EML: eml/{folder}/ → _Quarantine/eml/{folder}/
 3. Move HTML: html/{folder}/ → _Quarantine/html/{folder}/
 4. Move Markdown: markdown/{folder}/ → _Quarantine/markdown/{folder}/
-5. Move attachments: attachments/{folder}/ → _Quarantine/attachments/{folder}/
+5. Move attachments: transformed/{folder}/.../attachments/ → _Quarantine/transformed/{folder}/.../attachments/
 6. Update database: SET quarantined_at = now(), quarantine_reason = 'deleted_in_m365'
 ```
 

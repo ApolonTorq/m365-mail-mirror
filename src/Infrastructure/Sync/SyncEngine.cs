@@ -185,12 +185,8 @@ public class SyncEngine : ISyncEngine
             return folders.ToList();
         }
 
-        return folders
-            .Where(f => !excludeFolders.Any(exclude =>
-                f.DisplayName.Equals(exclude, StringComparison.OrdinalIgnoreCase) ||
-                f.FullPath.Equals(exclude, StringComparison.OrdinalIgnoreCase) ||
-                f.FullPath.StartsWith(exclude + "/", StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        var matcher = new FolderGlobMatcher(excludeFolders);
+        return matcher.FilterFolders(folders).ToList();
     }
 
     private async Task StoreFolderMappingsAsync(List<AppMailFolder> folders, CancellationToken cancellationToken)

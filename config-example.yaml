@@ -125,12 +125,13 @@ sync:
 
   # Folders to exclude from sync (default: empty list)
   # Use glob patterns to match folders:
-  #   - "Folder Name"           - Exact folder match
-  #   - "Parent/Child"          - Nested folder path
-  #   - "Archive/*"             - All immediate children of Archive
-  #   - "Archive/**"            - Archive and all descendants (recursive)
+  #   - "Folder Name"           - Exact folder match (and all descendants)
+  #   - "Parent/Child"          - Nested folder path (and all descendants)
+  #   - "Inbox/Azure*"          - Folders starting with "Azure" under Inbox
+  #   - "Archive/*"             - Immediate children of Archive only
+  #   - "Archive/**"            - All descendants of Archive (not Archive itself)
   #   - "**/Old*"               - Any folder starting with "Old" at any level
-  # Note: Folder names are case-sensitive on some systems.
+  # Note: Matching is case-insensitive.
   excludeFolders: []
   # excludeFolders:
   #   - "Junk Email"            # Microsoft 365 junk/spam folder
@@ -253,7 +254,7 @@ attachments:
 # When enabled, ZIP contents are extracted alongside the original ZIP file.
 #
 # Structure when extracted:
-#   attachments/Inbox/2024/01/Message_1030_attachments/
+#   transformed/Inbox/2024/01/attachments/Message_1030_attachments/
 #   ├── archive.zip              # Original ZIP (always preserved)
 #   └── archive.zip_extracted/   # Extracted contents
 #       ├── document.txt
