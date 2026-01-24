@@ -26,8 +26,9 @@ public class TransformationService : ITransformationService
     /// Current configuration version for transformations.
     /// Change this when transformation logic changes.
     /// v2: Added breadcrumb navigation to HTML and Markdown outputs.
+    /// v3: Unified transformed/ directory, inline images to images/ folder, cid: rewriting.
     /// </summary>
-    public const string CurrentConfigVersion = "v2";
+    public const string CurrentConfigVersion = "v3";
 
     /// <summary>
     /// Creates a new TransformationService.
@@ -276,8 +277,8 @@ public class TransformationService : ITransformationService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Build output path: html/{folder}/{YYYY}/{MM}/{filename}.html
-        var outputDir = BuildOutputDirectory("html", message.FolderPath, message.ReceivedTime);
+        // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.html
+        var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
         Directory.CreateDirectory(Path.Combine(_archiveRoot, outputDir));
 
         var filename = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath)) + ".html";
@@ -299,8 +300,8 @@ public class TransformationService : ITransformationService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Build output path: markdown/{folder}/{YYYY}/{MM}/{filename}.md
-        var outputDir = BuildOutputDirectory("markdown", message.FolderPath, message.ReceivedTime);
+        // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.md
+        var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
         Directory.CreateDirectory(Path.Combine(_archiveRoot, outputDir));
 
         var filename = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath)) + ".md";
@@ -322,135 +323,261 @@ public class TransformationService : ITransformationService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Build output path: attachments/{folder}/{YYYY}/{MM}/{message-id}/
-        var outputDir = BuildOutputDirectory("attachments", message.FolderPath, message.ReceivedTime);
-        var messageDir = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath));
-        var attachmentDir = Path.Combine(outputDir, messageDir);
-
         // Delete existing attachment records for this message to prevent duplicates on re-extraction
         await _database.DeleteAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
-        // Also delete any existing attachment files to start fresh
+        // Build paths for the new structure:
+        // - Inline images: transformed/{folder}/{YYYY}/{MM}/images/{email_filename}_{n}.{ext}
+        // - Regular attachments: transformed/{folder}/{YYYY}/{MM}/attachments/{email_filename}_attachments/{filename}
+        var imagesDir = BuildOutputDirectory("images", message.FolderPath, message.ReceivedTime);
+        var attachmentsBaseDir = BuildOutputDirectory("attachments", message.FolderPath, message.ReceivedTime);
+        var emailBaseName = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath));
+        var attachmentDir = Path.Combine(attachmentsBaseDir, $"{emailBaseName}_attachments");
+
+        // Delete any existing attachment/image files to start fresh
         var fullAttachmentDir = Path.Combine(_archiveRoot, attachmentDir);
         if (Directory.Exists(fullAttachmentDir))
         {
             Directory.Delete(fullAttachmentDir, recursive: true);
         }
 
-        var hasAttachments = false;
+        // Note: We don't delete the entire images folder since it's shared across emails in the same month
+        // Instead, we'll overwrite individual image files as needed
+
+        var hasContent = false;
         var attachmentCount = 0;
+        var inlineImageCount = 0;
+        var attachmentDirCreated = false;
+        var imagesDirCreated = false;
 
         // Default to skipping executables if no options provided
         var skipExecutables = attachmentOptions?.SkipExecutables ?? true;
 
-        foreach (var attachment in mimeMessage.Attachments)
+        // Use BodyParts instead of Attachments to include inline images
+        // MimeMessage.Attachments only returns parts with Content-Disposition: attachment
+        // Inline images have Content-Disposition: inline and are part of BodyParts
+        foreach (var bodyPart in mimeMessage.BodyParts.OfType<MimePart>())
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var part = attachment as MimePart;
-            if (part == null) continue;
+            // Skip text parts (they're the message body, not attachments/images)
+            if (bodyPart is TextPart)
+                continue;
 
-            var originalFilename = part.FileName ?? $"attachment_{attachmentCount}";
-            var filename = SanitizeFilename(originalFilename);
+            var disposition = bodyPart.ContentDisposition?.Disposition;
+            var isInline = disposition == ContentDisposition.Inline;
+            var isAttachment = disposition == ContentDisposition.Attachment;
+            var contentId = bodyPart.ContentId; // For cid: reference mapping
 
-            // Create directory only when we have attachments
-            if (!hasAttachments)
+            // Also treat parts with ContentId but no explicit disposition as inline images
+            // (some email clients don't set Content-Disposition but do set Content-Id)
+            var hasContentId = !string.IsNullOrEmpty(contentId);
+
+            // Skip if neither inline, attachment, nor has contentId
+            if (!isInline && !isAttachment && !hasContentId)
+                continue;
+
+            // If has ContentId but no disposition, treat as inline
+            if (hasContentId && !isInline && !isAttachment)
+                isInline = true;
+
+            if (isInline)
             {
-                Directory.CreateDirectory(Path.Combine(_archiveRoot, attachmentDir));
-                hasAttachments = true;
-            }
+                // Extract inline image to images/ folder with naming: {email_filename}_{n}.{ext}
+                inlineImageCount++;
+                var originalFilename = bodyPart.FileName ?? $"image_{inlineImageCount}";
+                var ext = Path.GetExtension(originalFilename);
+                if (string.IsNullOrEmpty(ext))
+                {
+                    // Try to determine extension from content type
+                    ext = GetExtensionFromContentType(bodyPart.ContentType?.MimeType) ?? ".bin";
+                }
+                var imageFilename = $"{emailBaseName}_{inlineImageCount}{ext}";
 
-            // Check if this is an executable file (only if skipExecutables is enabled)
-            var blockedExtension = skipExecutables ? SecurityHelper.GetBlockedExtension(filename) : null;
-            if (blockedExtension != null)
-            {
-                // Create a .skipped placeholder file instead
-                var skippedFilename = filename + ".skipped";
-                var skippedPath = Path.Combine(attachmentDir, skippedFilename);
-                var fullSkippedPath = Path.Combine(_archiveRoot, skippedPath);
+                // Create images directory if needed
+                if (!imagesDirCreated)
+                {
+                    Directory.CreateDirectory(Path.Combine(_archiveRoot, imagesDir));
+                    imagesDirCreated = true;
+                }
 
-                var placeholder = SecurityHelper.GenerateSkippedPlaceholder(
-                    originalFilename,
-                    message.LocalPath,
-                    $"Executable file type ({blockedExtension})");
+                var imagePath = Path.Combine(imagesDir, imageFilename);
+                var fullImagePath = Path.Combine(_archiveRoot, imagePath);
 
-                await File.WriteAllTextAsync(fullSkippedPath, placeholder, cancellationToken);
+                // Handle filename collisions (unlikely but possible)
+                var counter = 1;
+                while (File.Exists(fullImagePath))
+                {
+                    imageFilename = $"{emailBaseName}_{inlineImageCount}_{counter}{ext}";
+                    imagePath = Path.Combine(imagesDir, imageFilename);
+                    fullImagePath = Path.Combine(_archiveRoot, imagePath);
+                    counter++;
+                }
 
-                _logger.Info("Skipped executable attachment: {0} - created placeholder {1}", originalFilename, skippedFilename);
+                // Extract the image
+                {
+                    using var stream = File.Create(fullImagePath);
+                    await bodyPart.Content.DecodeToAsync(stream, cancellationToken);
+                }
 
-                // Record skipped attachment in database
-                var skippedAttachment = new Attachment
+                var fileSize = new FileInfo(fullImagePath).Length;
+                hasContent = true;
+
+                // Record inline image in database with ContentId for cid: mapping
+                var imageEntity = new Attachment
                 {
                     MessageId = message.GraphId,
                     Filename = originalFilename,
-                    FilePath = skippedPath,
-                    SizeBytes = 0,
-                    ContentType = part.ContentType?.MimeType ?? "application/octet-stream",
-                    IsInline = part.ContentDisposition?.Disposition == ContentDisposition.Inline,
-                    Skipped = true,
-                    SkipReason = $"executable:{blockedExtension}",
+                    FilePath = imagePath,
+                    SizeBytes = fileSize,
+                    ContentType = bodyPart.ContentType?.MimeType ?? "image/unknown",
+                    IsInline = true,
+                    ContentId = contentId,
+                    Skipped = false,
+                    SkipReason = null,
                     ExtractedAt = DateTimeOffset.UtcNow
                 };
 
-                await _database.InsertAttachmentAsync(skippedAttachment, cancellationToken);
+                await _database.InsertAttachmentAsync(imageEntity, cancellationToken);
+            }
+            else
+            {
+                // Extract regular attachment to attachments/{email_filename}_attachments/ folder
+                var originalFilename = bodyPart.FileName ?? $"attachment_{attachmentCount}";
+                var filename = SanitizeFilename(originalFilename);
+
+                // Check if this is an executable file (only if skipExecutables is enabled)
+                var blockedExtension = skipExecutables ? SecurityHelper.GetBlockedExtension(filename) : null;
+                if (blockedExtension != null)
+                {
+                    // Create attachments directory if needed
+                    if (!attachmentDirCreated)
+                    {
+                        Directory.CreateDirectory(Path.Combine(_archiveRoot, attachmentDir));
+                        attachmentDirCreated = true;
+                    }
+
+                    // Create a .skipped placeholder file instead
+                    var skippedFilename = filename + ".skipped";
+                    var skippedPath = Path.Combine(attachmentDir, skippedFilename);
+                    var fullSkippedPath = Path.Combine(_archiveRoot, skippedPath);
+
+                    var placeholder = SecurityHelper.GenerateSkippedPlaceholder(
+                        originalFilename,
+                        message.LocalPath,
+                        $"Executable file type ({blockedExtension})");
+
+                    await File.WriteAllTextAsync(fullSkippedPath, placeholder, cancellationToken);
+
+                    _logger.Info("Skipped executable attachment: {0} - created placeholder {1}", originalFilename, skippedFilename);
+
+                    // Record skipped attachment in database
+                    var skippedAttachment = new Attachment
+                    {
+                        MessageId = message.GraphId,
+                        Filename = originalFilename,
+                        FilePath = skippedPath,
+                        SizeBytes = 0,
+                        ContentType = bodyPart.ContentType?.MimeType ?? "application/octet-stream",
+                        IsInline = false,
+                        ContentId = null,
+                        Skipped = true,
+                        SkipReason = $"executable:{blockedExtension}",
+                        ExtractedAt = DateTimeOffset.UtcNow
+                    };
+
+                    await _database.InsertAttachmentAsync(skippedAttachment, cancellationToken);
+                    attachmentCount++;
+                    hasContent = true;
+                    continue;
+                }
+
+                // Create attachments directory if needed
+                if (!attachmentDirCreated)
+                {
+                    Directory.CreateDirectory(Path.Combine(_archiveRoot, attachmentDir));
+                    attachmentDirCreated = true;
+                }
+
+                var outputPath = Path.Combine(attachmentDir, filename);
+                var fullPath = Path.Combine(_archiveRoot, outputPath);
+
+                // Handle filename collisions
+                var counter = 1;
+                while (File.Exists(fullPath))
+                {
+                    var ext = Path.GetExtension(filename);
+                    var baseName = Path.GetFileNameWithoutExtension(filename);
+                    filename = $"{baseName}_{counter}{ext}";
+                    outputPath = Path.Combine(attachmentDir, filename);
+                    fullPath = Path.Combine(_archiveRoot, outputPath);
+                    counter++;
+                }
+
+                // Use explicit block scope to ensure stream is closed before reading file size
+                {
+                    using var stream = File.Create(fullPath);
+                    await bodyPart.Content.DecodeToAsync(stream, cancellationToken);
+                }
                 attachmentCount++;
-                continue;
-            }
+                hasContent = true;
 
-            var outputPath = Path.Combine(attachmentDir, filename);
-            var fullPath = Path.Combine(_archiveRoot, outputPath);
+                var fileSize = new FileInfo(fullPath).Length;
 
-            // Handle filename collisions
-            var counter = 1;
-            while (File.Exists(fullPath))
-            {
-                var ext = Path.GetExtension(filename);
-                var baseName = Path.GetFileNameWithoutExtension(filename);
-                filename = $"{baseName}_{counter}{ext}";
-                outputPath = Path.Combine(attachmentDir, filename);
-                fullPath = Path.Combine(_archiveRoot, outputPath);
-                counter++;
-            }
+                // Record attachment in database
+                var attachmentEntity = new Attachment
+                {
+                    MessageId = message.GraphId,
+                    Filename = originalFilename,
+                    FilePath = outputPath,
+                    SizeBytes = fileSize,
+                    ContentType = bodyPart.ContentType?.MimeType ?? "application/octet-stream",
+                    IsInline = false,
+                    ContentId = null,
+                    Skipped = false,
+                    SkipReason = null,
+                    ExtractedAt = DateTimeOffset.UtcNow
+                };
 
-            // Use explicit block scope to ensure stream is closed before reading file size
-            {
-                using var stream = File.Create(fullPath);
-                await part.Content.DecodeToAsync(stream, cancellationToken);
-            }
-            attachmentCount++;
+                var attachmentId = await _database.InsertAttachmentAsync(attachmentEntity, cancellationToken);
 
-            var fileSize = new FileInfo(fullPath).Length;
-
-            // Record attachment in database
-            var attachmentEntity = new Attachment
-            {
-                MessageId = message.GraphId,
-                Filename = originalFilename,
-                FilePath = outputPath,
-                SizeBytes = fileSize,
-                ContentType = part.ContentType?.MimeType ?? "application/octet-stream",
-                IsInline = part.ContentDisposition?.Disposition == ContentDisposition.Inline,
-                Skipped = false,
-                SkipReason = null,
-                ExtractedAt = DateTimeOffset.UtcNow
-            };
-
-            var attachmentId = await _database.InsertAttachmentAsync(attachmentEntity, cancellationToken);
-
-            // Check if this is a ZIP file and extract it
-            if (ZipExtractor.IsZipFile(filename))
-            {
-                await ExtractZipAttachmentAsync(
-                    message,
-                    attachmentId,
-                    fullPath,
-                    Path.Combine(_archiveRoot, attachmentDir),
-                    Path.Combine(attachmentDir, filename + "_extracted"),
-                    cancellationToken);
+                // Check if this is a ZIP file and extract it
+                if (ZipExtractor.IsZipFile(filename))
+                {
+                    await ExtractZipAttachmentAsync(
+                        message,
+                        attachmentId,
+                        fullPath,
+                        Path.Combine(_archiveRoot, attachmentDir),
+                        Path.Combine(attachmentDir, filename + "_extracted"),
+                        cancellationToken);
+                }
             }
         }
 
-        return hasAttachments ? attachmentDir : "no_attachments";
+        return hasContent ? attachmentDir : "no_attachments";
+    }
+
+    /// <summary>
+    /// Gets a file extension from a MIME content type.
+    /// </summary>
+    private static string? GetExtensionFromContentType(string? contentType)
+    {
+        if (string.IsNullOrEmpty(contentType))
+            return null;
+
+        return contentType.ToLowerInvariant() switch
+        {
+            "image/png" => ".png",
+            "image/jpeg" => ".jpg",
+            "image/gif" => ".gif",
+            "image/webp" => ".webp",
+            "image/bmp" => ".bmp",
+            "image/svg+xml" => ".svg",
+            "image/tiff" => ".tiff",
+            "image/x-icon" => ".ico",
+            _ => null
+        };
     }
 
     private async Task ExtractZipAttachmentAsync(
@@ -503,11 +630,19 @@ public class TransformationService : ITransformationService
 
     private static string BuildOutputDirectory(string outputType, string folderPath, DateTimeOffset receivedTime)
     {
-        return Path.Combine(
-            outputType,
+        var basePath = Path.Combine(
+            "transformed",
             folderPath,
             receivedTime.Year.ToString("D4", CultureInfo.InvariantCulture),
             receivedTime.Month.ToString("D2", CultureInfo.InvariantCulture));
+
+        // For attachments and images, add the subfolder
+        return outputType switch
+        {
+            "attachments" => Path.Combine(basePath, "attachments"),
+            "images" => Path.Combine(basePath, "images"),
+            _ => basePath
+        };
     }
 
     private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions)
@@ -518,6 +653,12 @@ public class TransformationService : ITransformationService
         if (string.IsNullOrEmpty(message.HtmlBody) && !string.IsNullOrEmpty(message.TextBody))
         {
             body = $"<pre>{System.Net.WebUtility.HtmlEncode(message.TextBody)}</pre>";
+        }
+
+        // Rewrite cid: references to point to extracted inline images
+        if (attachments != null && !string.IsNullOrEmpty(body))
+        {
+            body = RewriteCidReferences(body, outputPath, attachments);
         }
 
         // Strip external images if configured
@@ -646,6 +787,64 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
         var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", "");
         text = System.Net.WebUtility.HtmlDecode(text);
         return text.Trim();
+    }
+
+    /// <summary>
+    /// Rewrites cid: references in HTML to point to extracted inline images.
+    /// </summary>
+    /// <param name="html">The HTML body content</param>
+    /// <param name="outputPath">The output path of the HTML file (for calculating relative paths)</param>
+    /// <param name="attachments">The list of attachments including inline images with ContentId</param>
+    /// <returns>HTML with cid: references replaced with relative paths to images</returns>
+    private static string RewriteCidReferences(string html, string outputPath, IReadOnlyList<Attachment> attachments)
+    {
+        // Build a mapping from ContentId to file path for inline images
+        var cidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var attachment in attachments)
+        {
+            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId))
+            {
+                // Calculate relative path from output file to the image
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                cidToPath[attachment.ContentId] = relativePath;
+            }
+        }
+
+        if (cidToPath.Count == 0)
+            return html;
+
+        // Replace cid: references with relative paths
+        // Matches: src="cid:xxx" or src='cid:xxx'
+        return System.Text.RegularExpressions.Regex.Replace(
+            html,
+            @"(src\s*=\s*[""'])cid:([^""']+)([""'])",
+            match =>
+            {
+                var prefix = match.Groups[1].Value;
+                var cidValue = match.Groups[2].Value;
+                var suffix = match.Groups[3].Value;
+
+                // Try to find the ContentId (may or may not have angle brackets)
+                var lookupCid = cidValue.Trim();
+                if (cidToPath.TryGetValue(lookupCid, out var relativePath))
+                {
+                    return $"{prefix}{relativePath}{suffix}";
+                }
+
+                // Also try without angle brackets if the cid has them
+                if (lookupCid.StartsWith('<') && lookupCid.EndsWith('>'))
+                {
+                    lookupCid = lookupCid[1..^1];
+                    if (cidToPath.TryGetValue(lookupCid, out relativePath))
+                    {
+                        return $"{prefix}{relativePath}{suffix}";
+                    }
+                }
+
+                // If not found, leave the original reference
+                return match.Value;
+            },
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     /// <summary>

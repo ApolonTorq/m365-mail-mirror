@@ -68,7 +68,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlBreadcrumb_SimpleEmailPath_GeneratesCorrectHtml()
     {
         var result = BreadcrumbHelper.GenerateHtmlBreadcrumb(
-            "html/Inbox/2024/01/Meeting_1030.html",
+            "transformed/Inbox/2024/01/Meeting_1030.html",
             "Meeting Notes");
 
         result.Should().Contain("<nav class=\"breadcrumb\">");
@@ -85,7 +85,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlBreadcrumb_EmailPath_ContainsCorrectRelativePaths()
     {
         var result = BreadcrumbHelper.GenerateHtmlBreadcrumb(
-            "html/Inbox/2024/01/Meeting_1030.html",
+            "transformed/Inbox/2024/01/Meeting_1030.html",
             "Subject");
 
         // Path depth: Inbox/2024/01/filename = 4 levels deep, so Archive index is ../../../../index.html
@@ -99,7 +99,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlBreadcrumb_NestedSubfolder_IncludesAllSegments()
     {
         var result = BreadcrumbHelper.GenerateHtmlBreadcrumb(
-            "html/Inbox/Projects/Work/2024/01/Email_1030.html",
+            "transformed/Inbox/Projects/Work/2024/01/Email_1030.html",
             "Subject");
 
         result.Should().Contain("Archive");
@@ -114,7 +114,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlBreadcrumb_SpecialCharactersInSubject_HtmlEncoded()
     {
         var result = BreadcrumbHelper.GenerateHtmlBreadcrumb(
-            "html/Inbox/2024/01/Email_1030.html",
+            "transformed/Inbox/2024/01/Email_1030.html",
             "Subject <script>alert('xss')</script>");
 
         result.Should().NotContain("<script>");
@@ -129,7 +129,7 @@ public class BreadcrumbHelperTests
     public void GenerateMarkdownBreadcrumb_SimpleEmailPath_GeneratesCorrectMarkdown()
     {
         var result = BreadcrumbHelper.GenerateMarkdownBreadcrumb(
-            "markdown/Inbox/2024/01/Meeting_1030.md",
+            "transformed/Inbox/2024/01/Meeting_1030.md",
             "Meeting Notes");
 
         result.Should().Contain("[Archive]");
@@ -143,7 +143,7 @@ public class BreadcrumbHelperTests
     public void GenerateMarkdownBreadcrumb_EmailPath_ContainsMarkdownExtensions()
     {
         var result = BreadcrumbHelper.GenerateMarkdownBreadcrumb(
-            "markdown/Inbox/2024/01/Meeting_1030.md",
+            "transformed/Inbox/2024/01/Meeting_1030.md",
             "Subject");
 
         result.Should().Contain(".md)");
@@ -154,7 +154,7 @@ public class BreadcrumbHelperTests
     public void GenerateMarkdownBreadcrumb_EmailPath_ContainsCorrectRelativePaths()
     {
         var result = BreadcrumbHelper.GenerateMarkdownBreadcrumb(
-            "markdown/Inbox/2024/01/Meeting_1030.md",
+            "transformed/Inbox/2024/01/Meeting_1030.md",
             "Subject");
 
         result.Should().Contain("(../../../index.md)"); // Archive root
@@ -167,7 +167,7 @@ public class BreadcrumbHelperTests
     public void GenerateMarkdownBreadcrumb_UsesGreaterThanSeparators()
     {
         var result = BreadcrumbHelper.GenerateMarkdownBreadcrumb(
-            "markdown/Inbox/2024/01/Meeting_1030.md",
+            "transformed/Inbox/2024/01/Meeting_1030.md",
             "Subject");
 
         result.Should().Contain(" > ");
@@ -180,7 +180,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateHtmlIndexBreadcrumb_RootIndex_GeneratesArchiveOnly()
     {
-        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("html/index.html");
+        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("transformed/index.html");
 
         result.Should().Contain("<nav class=\"breadcrumb\">");
         result.Should().Contain("<span class=\"current\">Archive</span>");
@@ -189,7 +189,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateHtmlIndexBreadcrumb_FolderIndex_GeneratesCorrectBreadcrumb()
     {
-        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("html/Inbox/index.html");
+        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("transformed/Inbox/index.html");
 
         result.Should().Contain("Archive");
         result.Should().Contain("<span class=\"current\">Inbox</span>");
@@ -198,7 +198,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateHtmlIndexBreadcrumb_MonthIndex_GeneratesFullBreadcrumb()
     {
-        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("html/Inbox/2024/01/index.html");
+        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("transformed/Inbox/2024/01/index.html");
 
         result.Should().Contain("Archive");
         result.Should().Contain("Inbox");
@@ -209,7 +209,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateHtmlIndexBreadcrumb_YearIndex_ConvertsMonthProperly()
     {
-        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("html/Inbox/2024/index.html");
+        var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb("transformed/Inbox/2024/index.html");
 
         result.Should().Contain("Archive");
         result.Should().Contain("Inbox");
@@ -223,7 +223,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateMarkdownIndexBreadcrumb_RootIndex_GeneratesArchiveOnly()
     {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("markdown/index.md");
+        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/index.md");
 
         result.Should().Contain("**Archive**");
     }
@@ -231,7 +231,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateMarkdownIndexBreadcrumb_FolderIndex_GeneratesCorrectBreadcrumb()
     {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("markdown/Inbox/index.md");
+        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/Inbox/index.md");
 
         result.Should().Contain("[Archive]");
         result.Should().Contain("**Inbox**");
@@ -240,7 +240,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateMarkdownIndexBreadcrumb_MonthIndex_GeneratesFullBreadcrumb()
     {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("markdown/Inbox/2024/01/index.md");
+        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/Inbox/2024/01/index.md");
 
         result.Should().Contain("[Archive]");
         result.Should().Contain("[Inbox]");
@@ -256,7 +256,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlBreadcrumb_BackslashPaths_NormalizedCorrectly()
     {
         var result = BreadcrumbHelper.GenerateHtmlBreadcrumb(
-            "html\\Inbox\\2024\\01\\Meeting_1030.html",
+            "transformed\\Inbox\\2024\\01\\Meeting_1030.html",
             "Subject");
 
         result.Should().Contain("Archive");
@@ -269,7 +269,7 @@ public class BreadcrumbHelperTests
     public void GenerateMarkdownBreadcrumb_BackslashPaths_NormalizedCorrectly()
     {
         var result = BreadcrumbHelper.GenerateMarkdownBreadcrumb(
-            "markdown\\Inbox\\2024\\01\\Meeting_1030.md",
+            "transformed\\Inbox\\2024\\01\\Meeting_1030.md",
             "Subject");
 
         result.Should().Contain("[Archive]");
@@ -292,7 +292,7 @@ public class BreadcrumbHelperTests
     [Fact]
     public void GenerateHtmlBreadcrumb_SingleLevelPath_HandlesCorrectly()
     {
-        var result = BreadcrumbHelper.GenerateHtmlBreadcrumb("html/email.html", "Subject");
+        var result = BreadcrumbHelper.GenerateHtmlBreadcrumb("transformed/email.html", "Subject");
 
         result.Should().Contain("Archive");
         result.Should().Contain("Subject");
@@ -302,7 +302,7 @@ public class BreadcrumbHelperTests
     public void GenerateHtmlIndexBreadcrumb_NestedSubfolders_AllLevelsIncluded()
     {
         var result = BreadcrumbHelper.GenerateHtmlIndexBreadcrumb(
-            "html/Inbox/Projects/Client A/Reports/2024/06/index.html");
+            "transformed/Inbox/Projects/Client A/Reports/2024/06/index.html");
 
         result.Should().Contain("Archive");
         result.Should().Contain("Inbox");

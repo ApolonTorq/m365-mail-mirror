@@ -85,19 +85,19 @@ public class IndexGenerationServiceTests : IDisposable
         result.MarkdownIndexesGenerated.Should().Be(0);
 
         // Verify root index exists
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         File.Exists(rootIndex).Should().BeTrue();
 
         // Verify folder index exists
-        var folderIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "index.html");
+        var folderIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "index.html");
         File.Exists(folderIndex).Should().BeTrue();
 
         // Verify year index exists
-        var yearIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "index.html");
+        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
         File.Exists(yearIndex).Should().BeTrue();
 
         // Verify month index exists
-        var monthIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
         File.Exists(monthIndex).Should().BeTrue();
     }
 
@@ -115,11 +115,11 @@ public class IndexGenerationServiceTests : IDisposable
         result.MarkdownIndexesGenerated.Should().BeGreaterThan(0);
 
         // Verify root index exists
-        var rootIndex = Path.Combine(_testArchiveRoot, "markdown", "index.md");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.md");
         File.Exists(rootIndex).Should().BeTrue();
 
         // Verify month index exists
-        var monthIndex = Path.Combine(_testArchiveRoot, "markdown", "Inbox", "2024", "01", "index.md");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.md");
         File.Exists(monthIndex).Should().BeTrue();
     }
 
@@ -153,7 +153,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
         content.Should().Contain("Inbox/index.html");
@@ -170,7 +170,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         content.Should().Contain("Test Subject 1");
@@ -188,7 +188,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         content.Should().Contain("breadcrumb");
@@ -206,7 +206,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var folderIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "index.html");
+        var folderIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "index.html");
         var content = await File.ReadAllTextAsync(folderIndex);
 
         content.Should().Contain("../index.html");
@@ -222,7 +222,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = false, GenerateMarkdownIndexes = true },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "markdown", "Inbox", "2024", "01", "index.md");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.md");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         // Should contain markdown table format
@@ -247,7 +247,7 @@ public class IndexGenerationServiceTests : IDisposable
         result.Success.Should().BeTrue();
 
         // Root should link to all folders
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
         content.Should().Contain("Inbox");
@@ -271,7 +271,7 @@ public class IndexGenerationServiceTests : IDisposable
         result.Success.Should().BeTrue();
 
         // Year index should link to all months
-        var yearIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "index.html");
+        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
         var content = await File.ReadAllTextAsync(yearIndex);
 
         content.Should().Contain("January");
@@ -291,7 +291,7 @@ public class IndexGenerationServiceTests : IDisposable
         result.Success.Should().BeTrue();
 
         // HTML: Year index should use numeric folder paths for month links
-        var htmlYearIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "index.html");
+        var htmlYearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
         var htmlContent = await File.ReadAllTextAsync(htmlYearIndex);
 
         // Links should use "01/index.html", not "January/index.html"
@@ -303,7 +303,7 @@ public class IndexGenerationServiceTests : IDisposable
         htmlContent.Should().NotContain("December/index.html");
 
         // Markdown: Year index should use numeric folder paths for month links
-        var mdYearIndex = Path.Combine(_testArchiveRoot, "markdown", "Inbox", "2024", "index.md");
+        var mdYearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.md");
         var mdContent = await File.ReadAllTextAsync(mdYearIndex);
 
         // Links should use "01/index.md", not "January/index.md"
@@ -348,7 +348,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "html", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         // HTML entity for paperclip
@@ -368,7 +368,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
         content.Should().Contain("5 messages");
@@ -383,7 +383,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
         content.Should().Contain("1 message");
@@ -403,7 +403,7 @@ public class IndexGenerationServiceTests : IDisposable
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var rootIndex = Path.Combine(_testArchiveRoot, "html", "index.html");
+        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
         // Outlook-like blue header

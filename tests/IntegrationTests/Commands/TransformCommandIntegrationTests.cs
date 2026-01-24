@@ -45,7 +45,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         stdout.Should().Contain("Transformation completed");
 
         // Verify HTML files created
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         Directory.Exists(htmlDirectory).Should().BeTrue("HTML directory should be created");
 
         var htmlFiles = Directory.GetFiles(htmlDirectory, "*.html", SearchOption.AllDirectories);
@@ -84,7 +84,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         stdout.Should().Contain("Transformation completed");
 
         // Verify Markdown files created
-        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         Directory.Exists(mdDirectory).Should().BeTrue("Markdown directory should be created");
 
         var mdFiles = Directory.GetFiles(mdDirectory, "*.md", SearchOption.AllDirectories);
@@ -237,8 +237,8 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         stdout.Should().Contain("Transformation completed");
 
         // Verify both HTML and Markdown directories exist
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
-        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
 
         Directory.Exists(htmlDirectory).Should().BeTrue("HTML directory should be created");
         Directory.Exists(mdDirectory).Should().BeTrue("Markdown directory should be created");
@@ -285,7 +285,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await htmlCommand.ExecuteAsync(htmlConsole.Console);
 
         // Assert - Find attachment files and verify links in HTML
-        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "attachments");
+        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         if (!Directory.Exists(attachmentsDirectory))
         {
             Output.WriteLine("No attachments directory found - test mailbox may not contain attachments");
@@ -295,6 +295,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
 
         var attachmentFiles = Directory.GetFiles(attachmentsDirectory, "*.*", SearchOption.AllDirectories)
             .Where(f => !f.EndsWith(".skipped", StringComparison.OrdinalIgnoreCase))
+            .Where(f => f.Contains(Path.DirectorySeparatorChar + "attachments" + Path.DirectorySeparatorChar))
             .ToList();
 
         if (attachmentFiles.Count == 0)
@@ -304,7 +305,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
             return;
         }
 
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var verifiedCount = 0;
 
         // Check up to 3 attachments for links in corresponding HTML files
@@ -313,16 +314,25 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
             var attachmentRelativePath = Path.GetRelativePath(Fixture.TestOutputPath, attachmentFile);
             var attachmentFileName = Path.GetFileName(attachmentFile);
 
-            // Parse path: attachments/{folder}/{YYYY}/{MM}/{message}_attachments/{file}
+            // Parse path: transformed/{folder...}/{YYYY}/{MM}/attachments/{message}_attachments/{file}
+            // Note: folder can have multiple levels (e.g., "Inbox/Investors")
             var pathParts = attachmentRelativePath.Split(Path.DirectorySeparatorChar);
-            if (pathParts.Length >= 5 && pathParts[0] == "attachments")
-            {
-                var folder = pathParts[1];
-                var year = pathParts[2];
-                var month = pathParts[3];
-                var messageDir = pathParts[4]; // e.g., "Message_1030_attachments" or "Message_1030"
+            var attachmentsIndex = Array.IndexOf(pathParts, "attachments");
 
-                // Remove trailing directory name to get message base name
+            // Path must be: transformed/{folder...}/{YYYY}/{MM}/attachments/{message}_attachments/{file}
+            // So attachments index must be at least 4 (transformed + folder + year + month + attachments)
+            if (attachmentsIndex >= 4 && pathParts[0] == "transformed" && attachmentsIndex + 2 < pathParts.Length)
+            {
+                var yearIndex = attachmentsIndex - 2;
+                var monthIndex = attachmentsIndex - 1;
+                var year = pathParts[yearIndex];
+                var month = pathParts[monthIndex];
+                var messageDir = pathParts[attachmentsIndex + 1]; // e.g., "Message_1030_attachments"
+
+                // Build folder path (everything between "transformed" and year/month)
+                var folderParts = pathParts.Skip(1).Take(attachmentsIndex - 3).ToArray();
+                var folder = string.Join(Path.DirectorySeparatorChar, folderParts);
+
                 var messageBaseName = messageDir;
 
                 // Find matching HTML file in corresponding location
@@ -401,7 +411,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await mdCommand.ExecuteAsync(mdConsole.Console);
 
         // Assert - Find attachment files and verify links in Markdown
-        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "attachments");
+        var attachmentsDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         if (!Directory.Exists(attachmentsDirectory))
         {
             Output.WriteLine("No attachments directory found - test mailbox may not contain attachments");
@@ -411,6 +421,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
 
         var attachmentFiles = Directory.GetFiles(attachmentsDirectory, "*.*", SearchOption.AllDirectories)
             .Where(f => !f.EndsWith(".skipped", StringComparison.OrdinalIgnoreCase))
+            .Where(f => f.Contains(Path.DirectorySeparatorChar + "attachments" + Path.DirectorySeparatorChar))
             .ToList();
 
         if (attachmentFiles.Count == 0)
@@ -420,7 +431,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
             return;
         }
 
-        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var verifiedCount = 0;
 
         // Check up to 3 attachments for links in corresponding Markdown files
@@ -429,18 +440,28 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
             var attachmentRelativePath = Path.GetRelativePath(Fixture.TestOutputPath, attachmentFile);
             var attachmentFileName = Path.GetFileName(attachmentFile);
 
-            // Parse path: attachments/{folder}/{YYYY}/{MM}/{message}_attachments/{file}
+            // Parse path: transformed/{folder...}/{YYYY}/{MM}/attachments/{message}_attachments/{file}
+            // Note: folder can have multiple levels (e.g., "Inbox/Investors")
             var pathParts = attachmentRelativePath.Split(Path.DirectorySeparatorChar);
-            if (pathParts.Length >= 5 && pathParts[0] == "attachments")
+            var attachmentsIndex = Array.IndexOf(pathParts, "attachments");
+
+            // Path must be: transformed/{folder...}/{YYYY}/{MM}/attachments/{message}_attachments/{file}
+            // So attachments index must be at least 4 (transformed + folder + year + month + attachments)
+            if (attachmentsIndex >= 4 && pathParts[0] == "transformed" && attachmentsIndex + 2 < pathParts.Length)
             {
-                var folder = pathParts[1];
-                var year = pathParts[2];
-                var month = pathParts[3];
-                var messageDir = pathParts[4];
+                var yearIndex = attachmentsIndex - 2;
+                var monthIndex = attachmentsIndex - 1;
+                var year = pathParts[yearIndex];
+                var month = pathParts[monthIndex];
+                var messageDir = pathParts[attachmentsIndex + 1]; // e.g., "Message_1030_attachments"
+
+                // Build folder path (everything between "transformed" and year/month)
+                var folderParts = pathParts.Skip(1).Take(attachmentsIndex - 3).ToArray();
+                var folder = string.Join(Path.DirectorySeparatorChar, folderParts);
 
                 var messageBaseName = messageDir;
 
-                // Find matching Markdown file in corresponding location
+                // Find matching Markdown file in corresponding location (same directory as HTML)
                 var mdSearchDir = Path.Combine(mdDirectory, folder, year, month);
                 if (Directory.Exists(mdSearchDir))
                 {
@@ -513,7 +534,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         stdout.Should().Contain("HTML indexes");
 
         // Verify root HTML index exists
-        var rootHtmlIndex = Path.Combine(Fixture.TestOutputPath, "html", "index.html");
+        var rootHtmlIndex = Path.Combine(Fixture.TestOutputPath, "transformed", "index.html");
         File.Exists(rootHtmlIndex).Should().BeTrue("Root HTML index should be created");
 
         // Verify root index content
@@ -555,7 +576,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         stdout.Should().Contain("Markdown indexes");
 
         // Verify root Markdown index exists
-        var rootMdIndex = Path.Combine(Fixture.TestOutputPath, "markdown", "index.md");
+        var rootMdIndex = Path.Combine(Fixture.TestOutputPath, "transformed", "index.md");
         File.Exists(rootMdIndex).Should().BeTrue("Root Markdown index should be created");
 
         // Verify root index content
@@ -591,7 +612,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await command.ExecuteAsync(console.Console);
 
         // Assert - Find all index files
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var indexFiles = Directory.GetFiles(htmlDirectory, "index.html", SearchOption.AllDirectories);
 
         indexFiles.Should().NotBeEmpty("At least one index file should exist");
@@ -638,7 +659,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await command.ExecuteAsync(console.Console);
 
         // Assert - Find HTML email files (not index files)
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var htmlFiles = Directory.GetFiles(htmlDirectory, "*.html", SearchOption.AllDirectories)
             .Where(f => !Path.GetFileName(f).Equals("index.html", StringComparison.OrdinalIgnoreCase))
             .Take(5) // Check up to 5 files
@@ -690,7 +711,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await command.ExecuteAsync(console.Console);
 
         // Assert - Find Markdown email files (not index files)
-        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "markdown");
+        var mdDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var mdFiles = Directory.GetFiles(mdDirectory, "*.md", SearchOption.AllDirectories)
             .Where(f => !Path.GetFileName(f).Equals("index.md", StringComparison.OrdinalIgnoreCase))
             .Take(5) // Check up to 5 files
@@ -742,7 +763,7 @@ public class TransformCommandIntegrationTests : IntegrationTestBase
         await command.ExecuteAsync(console.Console);
 
         // Assert - Find a month-level index (e.g., html/Inbox/2024/01/index.html)
-        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+        var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
         var indexFiles = Directory.GetFiles(htmlDirectory, "index.html", SearchOption.AllDirectories);
 
         // Find deepest index files (month level typically has 4+ path segments: html/folder/year/month/index.html)

@@ -221,12 +221,12 @@ public class IndexGenerationService : IIndexGenerationService
     {
         var count = 0;
 
-        // Generate root index
-        await GenerateHtmlIndexFileAsync(root, "html", cancellationToken);
+        // Generate root index in the unified transformed directory
+        await GenerateHtmlIndexFileAsync(root, "transformed", cancellationToken);
         count++;
 
         // Recursively generate for all children
-        count += await GenerateHtmlIndexesRecursiveAsync(root, "html", cancellationToken);
+        count += await GenerateHtmlIndexesRecursiveAsync(root, "transformed", cancellationToken);
 
         return count;
     }
@@ -290,12 +290,12 @@ public class IndexGenerationService : IIndexGenerationService
     {
         var count = 0;
 
-        // Generate root index
-        await GenerateMarkdownIndexFileAsync(root, "markdown", cancellationToken);
+        // Generate root index in the unified transformed directory (same location as HTML)
+        await GenerateMarkdownIndexFileAsync(root, "transformed", cancellationToken);
         count++;
 
         // Recursively generate for all children
-        count += await GenerateMarkdownIndexesRecursiveAsync(root, "markdown", cancellationToken);
+        count += await GenerateMarkdownIndexesRecursiveAsync(root, "transformed", cancellationToken);
 
         return count;
     }

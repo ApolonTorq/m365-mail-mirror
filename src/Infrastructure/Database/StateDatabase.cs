@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS attachments (
     size_bytes INTEGER NOT NULL,
     content_type TEXT,
     is_inline INTEGER NOT NULL,
+    content_id TEXT,
     skipped INTEGER NOT NULL DEFAULT 0,
     skip_reason TEXT,
     extracted_at TEXT NOT NULL,
@@ -1019,7 +1020,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
             SELECT id, message_id, filename, file_path, size_bytes, content_type,
-                   is_inline, skipped, skip_reason, extracted_at
+                   is_inline, content_id, skipped, skip_reason, extracted_at
             FROM attachments
             WHERE message_id = @messageId
             ORDER BY id";
@@ -1043,9 +1044,9 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
             INSERT INTO attachments (message_id, filename, file_path, size_bytes, content_type,
-                                     is_inline, skipped, skip_reason, extracted_at)
+                                     is_inline, content_id, skipped, skip_reason, extracted_at)
             VALUES (@messageId, @filename, @filePath, @sizeBytes, @contentType,
-                    @isInline, @skipped, @skipReason, @extractedAt);
+                    @isInline, @contentId, @skipped, @skipReason, @extractedAt);
             SELECT last_insert_rowid();";
 
         cmd.Parameters.AddWithValue("@messageId", attachment.MessageId);
@@ -1054,6 +1055,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         cmd.Parameters.AddWithValue("@sizeBytes", attachment.SizeBytes);
         cmd.Parameters.AddWithValue("@contentType", (object?)attachment.ContentType ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@isInline", attachment.IsInline ? 1 : 0);
+        cmd.Parameters.AddWithValue("@contentId", (object?)attachment.ContentId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@skipped", attachment.Skipped ? 1 : 0);
         cmd.Parameters.AddWithValue("@skipReason", (object?)attachment.SkipReason ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@extractedAt", attachment.ExtractedAt.ToString("O"));
@@ -1082,7 +1084,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
             SELECT id, message_id, filename, file_path, size_bytes, content_type,
-                   is_inline, skipped, skip_reason, extracted_at
+                   is_inline, content_id, skipped, skip_reason, extracted_at
             FROM attachments
             WHERE skipped = 1
             ORDER BY extracted_at DESC";
@@ -1108,9 +1110,10 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
             SizeBytes = reader.GetInt64(4),
             ContentType = reader.IsDBNull(5) ? null : reader.GetString(5),
             IsInline = reader.GetInt32(6) != 0,
-            Skipped = reader.GetInt32(7) != 0,
-            SkipReason = reader.IsDBNull(8) ? null : reader.GetString(8),
-            ExtractedAt = DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture)
+            ContentId = reader.IsDBNull(7) ? null : reader.GetString(7),
+            Skipped = reader.GetInt32(8) != 0,
+            SkipReason = reader.IsDBNull(9) ? null : reader.GetString(9),
+            ExtractedAt = DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture)
         };
     }
 

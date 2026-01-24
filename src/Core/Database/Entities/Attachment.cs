@@ -43,6 +43,12 @@ public class Attachment
     public required bool IsInline { get; set; }
 
     /// <summary>
+    /// The MIME Content-ID for inline attachments (used for cid: references in HTML).
+    /// Example: "image001@01D12345.6789ABCD"
+    /// </summary>
+    public string? ContentId { get; set; }
+
+    /// <summary>
     /// Whether extraction was skipped for this attachment.
     /// True for blocked file types (executables, etc.)
     /// </summary>

@@ -228,29 +228,24 @@ See [ADR-003: EML-First Storage with Configurable Transformations](decisions/adr
 │   │   └── 2024/01/...
 │   └── Archive/
 │       └── 2024/01/...
-├── html/                             # Generated HTML (if enabled)
-│   ├── style.css                     # Global stylesheet
+├── transformed/                      # All derived content (if enabled)
 │   ├── Inbox/
-│   │   ├── style.css                 # Folder-level stylesheet
 │   │   └── 2024/
 │   │       └── 01/
-│   │           ├── style.css         # Month-level stylesheet
-│   │           ├── Meeting_Notes_1030.html
-│   │           └── Project_Update_1415.html
-│   └── Sent Items/...
-├── markdown/                         # Generated Markdown (if enabled)
-│   ├── Inbox/
-│   │   └── 2024/01/
-│   │       ├── Meeting_Notes_1030.md
-│   │       └── Project_Update_1415.md
-│   └── Sent Items/...
-├── attachments/                      # Extracted attachments (if enabled)
-│   ├── Inbox/
-│   │   └── 2024/01/
-│   │       ├── Meeting_Notes_1030_attachments/
-│   │       │   └── document.pdf
-│   │       └── Project_Update_1415_attachments/
-│   │           └── image.png
+│   │           ├── Meeting_Notes_1030.html      # HTML email view
+│   │           ├── Meeting_Notes_1030.md        # Markdown email view
+│   │           ├── Project_Update_1415.html
+│   │           ├── Project_Update_1415.md
+│   │           ├── index.html                   # Folder navigation (HTML)
+│   │           ├── index.md                     # Folder navigation (Markdown)
+│   │           ├── images/                      # Inline images (cid: references)
+│   │           │   ├── Meeting_Notes_1030_1.png
+│   │           │   └── Project_Update_1415_1.jpg
+│   │           └── attachments/                 # Regular attachments
+│   │               ├── Meeting_Notes_1030_attachments/
+│   │               │   └── document.pdf
+│   │               └── Project_Update_1415_attachments/
+│   │                   └── report.xlsx
 │   └── Sent Items/...
 ├── _Quarantine/                      # Deleted messages
 │   └── eml/                          # Preserves original structure

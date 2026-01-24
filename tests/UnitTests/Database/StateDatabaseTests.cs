@@ -310,7 +310,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1-abc123",
-            OutputPath = "html/Inbox/2024/01/Test.html"
+            OutputPath = "transformed/Inbox/2024/01/Test.html"
         };
 
         await _database.UpsertTransformationAsync(transformation);
@@ -338,7 +338,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "html/..."
+            OutputPath = "transformed/..."
         });
 
         await _database.UpsertTransformationAsync(new Transformation
@@ -347,7 +347,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "markdown",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "markdown/..."
+            OutputPath = "transformed/..."
         });
 
         var transformations = await _database.GetTransformationsForMessageAsync("msg-multi-transform");
@@ -368,7 +368,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v2",
-            OutputPath = "html/..."
+            OutputPath = "transformed/..."
         });
 
         // Message with outdated transformation
@@ -379,7 +379,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1", // outdated
-            OutputPath = "html/..."
+            OutputPath = "transformed/..."
         });
 
         var needingTransformation = await _database.GetMessagesNeedingTransformationAsync("html", "v2");
@@ -400,7 +400,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "html/..."
+            OutputPath = "transformed/..."
         });
 
         await _database.UpsertTransformationAsync(new Transformation
@@ -409,7 +409,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "markdown",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "markdown/..."
+            OutputPath = "transformed/..."
         });
 
         await _database.DeleteTransformationsForMessageAsync("msg-delete-transforms");
@@ -583,7 +583,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "html/..."
+            OutputPath = "transformed/..."
         });
 
         await _database.DeleteMessageAsync("msg-cascade");
@@ -668,7 +668,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "html/Inbox/2024/01/test.html"
+            OutputPath = "transformed/Inbox/2024/01/test.html"
         });
 
         await _database.UpsertTransformationAsync(new Transformation
@@ -677,7 +677,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "html",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "html/Inbox/2024/01/test2.html"
+            OutputPath = "transformed/Inbox/2024/01/test2.html"
         });
 
         await _database.UpsertTransformationAsync(new Transformation
@@ -686,7 +686,7 @@ public class StateDatabaseTests : IAsyncLifetime
             TransformationType = "markdown",
             AppliedAt = DateTimeOffset.UtcNow,
             ConfigVersion = "v1",
-            OutputPath = "markdown/Inbox/2024/01/test.md"
+            OutputPath = "transformed/Inbox/2024/01/test.md"
         });
 
         var htmlCount = await _database.GetTransformationCountByTypeAsync("html");
@@ -746,7 +746,7 @@ public class StateDatabaseTests : IAsyncLifetime
         {
             MessageId = messageId,
             Filename = filename,
-            FilePath = $"attachments/Inbox/2024/01/{filename}",
+            FilePath = $"transformed/Inbox/2024/01/{filename}",
             SizeBytes = 5000,
             ContentType = "application/pdf",
             IsInline = false,
@@ -763,7 +763,7 @@ public class StateDatabaseTests : IAsyncLifetime
             AttachmentId = attachmentId,
             MessageId = messageId,
             ZipFilename = "data.zip",
-            ExtractionPath = "attachments/Inbox/2024/01/data.zip_extracted",
+            ExtractionPath = "transformed/Inbox/2024/01/data.zip_extracted",
             Extracted = true,
             SkipReason = null,
             FileCount = 10,

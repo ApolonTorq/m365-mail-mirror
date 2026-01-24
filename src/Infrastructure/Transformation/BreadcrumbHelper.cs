@@ -18,7 +18,7 @@ public static class BreadcrumbHelper
     /// <summary>
     /// Generates HTML breadcrumb navigation for an individual email file.
     /// </summary>
-    /// <param name="outputPath">Relative path from archive root (e.g., "html/Inbox/2024/01/Meeting_1030.html")</param>
+    /// <param name="outputPath">Relative path from archive root (e.g., "transformed/Inbox/2024/01/Meeting_1030.html")</param>
     /// <param name="subject">The email subject to display as the current item</param>
     /// <returns>HTML nav element with breadcrumb links</returns>
     public static string GenerateHtmlBreadcrumb(string outputPath, string subject)
@@ -30,7 +30,7 @@ public static class BreadcrumbHelper
     /// <summary>
     /// Generates Markdown breadcrumb navigation for an individual email file.
     /// </summary>
-    /// <param name="outputPath">Relative path from archive root (e.g., "markdown/Inbox/2024/01/Meeting_1030.md")</param>
+    /// <param name="outputPath">Relative path from archive root (e.g., "transformed/Inbox/2024/01/Meeting_1030.md")</param>
     /// <param name="subject">The email subject to display as the current item</param>
     /// <returns>Markdown line with breadcrumb links</returns>
     public static string GenerateMarkdownBreadcrumb(string outputPath, string subject)
@@ -42,7 +42,7 @@ public static class BreadcrumbHelper
     /// <summary>
     /// Generates HTML breadcrumb navigation for an index file.
     /// </summary>
-    /// <param name="indexPath">Relative path from archive root (e.g., "html/Inbox/2024/01/index.html")</param>
+    /// <param name="indexPath">Relative path from archive root (e.g., "transformed/Inbox/2024/01/index.html")</param>
     /// <returns>HTML nav element with breadcrumb links</returns>
     public static string GenerateHtmlIndexBreadcrumb(string indexPath)
     {
@@ -53,7 +53,7 @@ public static class BreadcrumbHelper
     /// <summary>
     /// Generates Markdown breadcrumb navigation for an index file.
     /// </summary>
-    /// <param name="indexPath">Relative path from archive root (e.g., "markdown/Inbox/2024/01/index.md")</param>
+    /// <param name="indexPath">Relative path from archive root (e.g., "transformed/Inbox/2024/01/index.md")</param>
     /// <returns>Markdown line with breadcrumb links</returns>
     public static string GenerateMarkdownIndexBreadcrumb(string indexPath)
     {
@@ -83,7 +83,7 @@ public static class BreadcrumbHelper
 
     /// <summary>
     /// Parses an output path into breadcrumb segments.
-    /// Path format: {outputType}/{folderPath}/{year}/{month}/{filename}
+    /// Path format: transformed/{folderPath}/{year}/{month}/{filename}
     /// </summary>
     private static List<BreadcrumbSegment> ParseOutputPath(string outputPath, bool isIndexFile)
     {
@@ -94,7 +94,7 @@ public static class BreadcrumbHelper
         if (parts.Length < 1)
             return segments;
 
-        // Skip the output type (html/markdown/attachments)
+        // Skip the output type root folder (transformed)
         var pathParts = parts.Skip(1).ToList();
 
         // For index files, remove the "index.html" or "index.md" filename

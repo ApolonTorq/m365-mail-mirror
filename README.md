@@ -26,15 +26,23 @@ A command-line tool to archive your Microsoft 365 mailbox to local EML files wit
 
 ```
 <mail-root>/
-├── eml/           # Permanent: Original messages in RFC 2822 MIME format
-├── html/          # Optional: Browsable HTML pages (regenerable)
-├── markdown/      # Optional: AI-friendly Markdown (regenerable)
-└── attachments/   # Optional: Extracted attachment files (regenerable)
+├── eml/                              # Permanent: Original messages in RFC 2822 MIME format
+└── transformed/                      # Optional: All derived content (regenerable)
+    └── {folder}/{YYYY}/{MM}/
+        ├── {message}.html            # HTML email view
+        ├── {message}.md              # AI-friendly Markdown
+        ├── index.html                # Folder navigation (HTML)
+        ├── index.md                  # Folder navigation (Markdown)
+        ├── images/                   # Inline images extracted from emails
+        │   └── {message}_{n}.{ext}
+        └── attachments/              # Regular attachments
+            └── {message}_attachments/
+                └── {filename}
 ```
 
-**Key concept**: EML files are downloaded once from Microsoft 365. All other formats (HTML, Markdown, attachments) are generated locally from the EML files. You can:
+**Key concept**: EML files are downloaded once from Microsoft 365. All other formats (HTML, Markdown, images, attachments) are generated locally from the EML files. You can:
 
-- Delete HTML/Markdown/attachments to save space (regenerate later with `transform` command)
+- Delete the `transformed/` folder to save space (regenerate later with `transform` command)
 - Change transformation settings without re-downloading email
 - Add new output formats months or years after initial sync
 

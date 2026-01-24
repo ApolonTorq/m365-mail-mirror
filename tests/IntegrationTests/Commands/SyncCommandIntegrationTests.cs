@@ -237,9 +237,9 @@ public class SyncCommandIntegrationTests : IntegrationTestBase
 
         if (messageCount > 0)
         {
-            var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "html");
+            var htmlDirectory = Path.Combine(Fixture.TestOutputPath, "transformed");
             Directory.Exists(htmlDirectory).Should().BeTrue(
-                "HTML directory should be created when --html flag is used");
+                "transformed directory should be created when --html flag is used");
         }
         MarkCompleted();
     }
