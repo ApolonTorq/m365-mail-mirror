@@ -28,14 +28,14 @@ public class TransformCommand : BaseCommand
     [CommandOption("parallel", 'p', Description = "Number of parallel transformations")]
     public int Parallel { get; init; } = 5;
 
-    [CommandOption("html", Description = "Enable HTML transformation")]
-    public bool Html { get; init; } = true;
+    [CommandOption("html", Description = "Enable HTML transformation (default: from config)")]
+    public bool? Html { get; init; }
 
-    [CommandOption("markdown", Description = "Enable Markdown transformation")]
-    public bool Markdown { get; init; } = true;
+    [CommandOption("markdown", Description = "Enable Markdown transformation (default: from config)")]
+    public bool? Markdown { get; init; }
 
-    [CommandOption("attachments", Description = "Enable attachment extraction")]
-    public bool Attachments { get; init; } = true;
+    [CommandOption("attachments", Description = "Enable attachment extraction (default: from config)")]
+    public bool? Attachments { get; init; }
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
@@ -46,6 +46,11 @@ public class TransformCommand : BaseCommand
         // Load configuration
         var config = ConfigurationLoader.Load(ConfigPath);
         var archiveRoot = ArchivePath ?? config.OutputPath;
+
+        // Apply transform configuration (CLI flags override config values)
+        var enableHtml = Html ?? config.Transform.GenerateHtml;
+        var enableMarkdown = Markdown ?? config.Transform.GenerateMarkdown;
+        var enableAttachments = Attachments ?? config.Transform.ExtractAttachments;
 
         // Verify archive directory exists
         if (!Directory.Exists(archiveRoot))
@@ -88,9 +93,20 @@ public class TransformCommand : BaseCommand
             Only = Only,
             Force = Force,
             MaxParallel = Parallel,
-            EnableHtml = Html,
-            EnableMarkdown = Markdown,
-            EnableAttachments = Attachments
+            EnableHtml = enableHtml,
+            EnableMarkdown = enableMarkdown,
+            EnableAttachments = enableAttachments,
+            HtmlOptions = new HtmlTransformOptions
+            {
+                InlineStyles = config.Transform.Html.InlineStyles,
+                StripExternalImages = config.Transform.Html.StripExternalImages,
+                HideCc = config.Transform.Html.HideCc,
+                HideBcc = config.Transform.Html.HideBcc
+            },
+            AttachmentOptions = new AttachmentExtractOptions
+            {
+                SkipExecutables = config.Attachments.SkipExecutables
+            }
         };
 
         // Execute transformation with progress reporting
@@ -111,7 +127,7 @@ public class TransformCommand : BaseCommand
         }, cancellationToken);
 
         // Generate navigation indexes after transformation
-        if ((Html || Markdown) && result.Success)
+        if ((enableHtml || enableMarkdown) && result.Success)
         {
             await console.Output.WriteLineAsync();
             await console.Output.WriteLineAsync("Generating navigation indexes...");
@@ -120,8 +136,8 @@ public class TransformCommand : BaseCommand
             var indexResult = await indexService.GenerateIndexesAsync(
                 new IndexGenerationOptions
                 {
-                    GenerateHtmlIndexes = Html,
-                    GenerateMarkdownIndexes = Markdown
+                    GenerateHtmlIndexes = enableHtml,
+                    GenerateMarkdownIndexes = enableMarkdown
                 },
                 cancellationToken);
 

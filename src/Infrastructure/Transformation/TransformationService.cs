@@ -112,7 +112,7 @@ public class TransformationService : ITransformationService
                     await semaphore.WaitAsync(cancellationToken);
                     try
                     {
-                        var result = await TransformMessageAsync(message, transformType, cancellationToken);
+                        var result = await TransformMessageAsync(message, transformType, options.HtmlOptions, options.AttachmentOptions, cancellationToken);
                         Interlocked.Increment(ref processedCount);
 
                         progressCallback?.Invoke(new TransformProgress
@@ -212,6 +212,8 @@ public class TransformationService : ITransformationService
     private async Task<TransformMessageResult> TransformMessageAsync(
         Message message,
         string transformType,
+        HtmlTransformOptions? htmlOptions,
+        AttachmentExtractOptions? attachmentOptions,
         CancellationToken cancellationToken)
     {
         try
@@ -235,13 +237,13 @@ public class TransformationService : ITransformationService
             switch (transformType)
             {
                 case "html":
-                    outputPath = await TransformToHtmlAsync(message, mimeMessage, cancellationToken);
+                    outputPath = await TransformToHtmlAsync(message, mimeMessage, htmlOptions, cancellationToken);
                     break;
                 case "markdown":
-                    outputPath = await TransformToMarkdownAsync(message, mimeMessage, cancellationToken);
+                    outputPath = await TransformToMarkdownAsync(message, mimeMessage, htmlOptions, cancellationToken);
                     break;
                 case "attachments":
-                    outputPath = await ExtractAttachmentsAsync(message, mimeMessage, cancellationToken);
+                    outputPath = await ExtractAttachmentsAsync(message, mimeMessage, attachmentOptions, cancellationToken);
                     break;
                 default:
                     _logger.Warning("Unknown transformation type: {0}", transformType);
@@ -270,7 +272,7 @@ public class TransformationService : ITransformationService
         }
     }
 
-    private async Task<string> TransformToHtmlAsync(Message message, MimeMessage mimeMessage, CancellationToken cancellationToken)
+    private async Task<string> TransformToHtmlAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -286,14 +288,14 @@ public class TransformationService : ITransformationService
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
         // Generate HTML with attachment links and breadcrumb navigation
-        var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath);
+        var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions);
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
         return outputPath;
     }
 
-    private async Task<string> TransformToMarkdownAsync(Message message, MimeMessage mimeMessage, CancellationToken cancellationToken)
+    private async Task<string> TransformToMarkdownAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -309,14 +311,14 @@ public class TransformationService : ITransformationService
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
         // Generate Markdown with attachment links and breadcrumb navigation
-        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath);
+        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions);
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
         return outputPath;
     }
 
-    private async Task<string> ExtractAttachmentsAsync(Message message, MimeMessage mimeMessage, CancellationToken cancellationToken)
+    private async Task<string> ExtractAttachmentsAsync(Message message, MimeMessage mimeMessage, AttachmentExtractOptions? attachmentOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -338,6 +340,9 @@ public class TransformationService : ITransformationService
         var hasAttachments = false;
         var attachmentCount = 0;
 
+        // Default to skipping executables if no options provided
+        var skipExecutables = attachmentOptions?.SkipExecutables ?? true;
+
         foreach (var attachment in mimeMessage.Attachments)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -355,8 +360,8 @@ public class TransformationService : ITransformationService
                 hasAttachments = true;
             }
 
-            // Check if this is an executable file
-            var blockedExtension = SecurityHelper.GetBlockedExtension(filename);
+            // Check if this is an executable file (only if skipExecutables is enabled)
+            var blockedExtension = skipExecutables ? SecurityHelper.GetBlockedExtension(filename) : null;
             if (blockedExtension != null)
             {
                 // Create a .skipped placeholder file instead
@@ -505,7 +510,7 @@ public class TransformationService : ITransformationService
             receivedTime.Month.ToString("D2", CultureInfo.InvariantCulture));
     }
 
-    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath)
+    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions)
     {
         var body = message.HtmlBody ?? message.TextBody ?? "";
 
@@ -515,13 +520,21 @@ public class TransformationService : ITransformationService
             body = $"<pre>{System.Net.WebUtility.HtmlEncode(message.TextBody)}</pre>";
         }
 
-        // Build optional CC line
-        var ccLine = message.Cc != null && message.Cc.Count > 0
+        // Strip external images if configured
+        if (htmlOptions?.StripExternalImages == true && !string.IsNullOrEmpty(body))
+        {
+            body = StripExternalImageReferences(body);
+        }
+
+        // Build optional CC line (respects HideCc config)
+        var hideCc = htmlOptions?.HideCc ?? false;
+        var ccLine = !hideCc && message.Cc != null && message.Cc.Count > 0
             ? $"            <div><strong>CC:</strong> {System.Net.WebUtility.HtmlEncode(message.Cc.ToString())}</div>\n"
             : "";
 
-        // Build optional BCC line
-        var bccLine = message.Bcc != null && message.Bcc.Count > 0
+        // Build optional BCC line (respects HideBcc config, defaults to true)
+        var hideBcc = htmlOptions?.HideBcc ?? true;
+        var bccLine = !hideBcc && message.Bcc != null && message.Bcc.Count > 0
             ? $"            <div><strong>BCC:</strong> {System.Net.WebUtility.HtmlEncode(message.Bcc.ToString())}</div>\n"
             : "";
 
@@ -572,7 +585,7 @@ public class TransformationService : ITransformationService
 </html>";
     }
 
-    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath)
+    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions)
     {
         var textBody = message.TextBody ?? "";
 
@@ -582,19 +595,21 @@ public class TransformationService : ITransformationService
             textBody = StripHtml(message.HtmlBody);
         }
 
-        // Build optional CC fields
-        var ccFrontMatter = message.Cc != null && message.Cc.Count > 0
+        // Build optional CC fields (respects HideCc config)
+        var hideCc = htmlOptions?.HideCc ?? false;
+        var ccFrontMatter = !hideCc && message.Cc != null && message.Cc.Count > 0
             ? $"cc: \"{EscapeYamlString(message.Cc.ToString())}\"\n"
             : "";
-        var ccLine = message.Cc != null && message.Cc.Count > 0
+        var ccLine = !hideCc && message.Cc != null && message.Cc.Count > 0
             ? $"**CC:** {message.Cc}\n"
             : "";
 
-        // Build optional BCC fields
-        var bccFrontMatter = message.Bcc != null && message.Bcc.Count > 0
+        // Build optional BCC fields (respects HideBcc config, defaults to true)
+        var hideBcc = htmlOptions?.HideBcc ?? true;
+        var bccFrontMatter = !hideBcc && message.Bcc != null && message.Bcc.Count > 0
             ? $"bcc: \"{EscapeYamlString(message.Bcc.ToString())}\"\n"
             : "";
-        var bccLine = message.Bcc != null && message.Bcc.Count > 0
+        var bccLine = !hideBcc && message.Bcc != null && message.Bcc.Count > 0
             ? $"**BCC:** {message.Bcc}\n"
             : "";
 
@@ -631,6 +646,21 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
         var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", "");
         text = System.Net.WebUtility.HtmlDecode(text);
         return text.Trim();
+    }
+
+    /// <summary>
+    /// Removes external image references (http/https) from HTML content.
+    /// Preserves inline images (data: URIs) and relative paths.
+    /// </summary>
+    private static string StripExternalImageReferences(string html)
+    {
+        // Remove <img> tags with external src (http:// or https://)
+        // Preserve data: URIs and relative paths
+        return System.Text.RegularExpressions.Regex.Replace(
+            html,
+            @"<img\s[^>]*src\s*=\s*[""']https?://[^""']*[""'][^>]*/??>",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
     }
 
     private static string EscapeYamlString(string value)
@@ -793,7 +823,7 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
             // are available when generating HTML/Markdown output
             if (options.ExtractAttachments)
             {
-                var result = await TransformMessageAsync(message, "attachments", cancellationToken);
+                var result = await TransformMessageAsync(message, "attachments", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
@@ -803,7 +833,7 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
 
             if (options.GenerateHtml)
             {
-                var result = await TransformMessageAsync(message, "html", cancellationToken);
+                var result = await TransformMessageAsync(message, "html", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
@@ -813,7 +843,7 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
 
             if (options.GenerateMarkdown)
             {
-                var result = await TransformMessageAsync(message, "markdown", cancellationToken);
+                var result = await TransformMessageAsync(message, "markdown", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;

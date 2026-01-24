@@ -100,15 +100,16 @@ outputPath: "/path/to/your/mail-archive"
 #
 # These settings control how messages are downloaded from Microsoft 365.
 # Environment variable overrides:
-#   M365_MAIL_MIRROR_SYNC_BATCH_SIZE
+#   M365_MAIL_MIRROR_SYNC_CHECKPOINT_INTERVAL
 #   M365_MAIL_MIRROR_SYNC_PARALLEL
 #   M365_MAIL_MIRROR_SYNC_OVERLAP_MINUTES
 
 sync:
-  # Number of messages to download per batch (default: 100)
-  # Higher values = fewer API calls but more memory usage.
-  # Recommended range: 50-200
-  batchSize: 100
+  # Number of messages between progress checkpoints (default: 10)
+  # Lower values = finer recovery granularity but more database writes.
+  # Higher values = less overhead but more re-downloads if interrupted.
+  # Recommended range: 5-50
+  checkpointInterval: 10
 
   # Number of concurrent download threads (default: 5)
   # Microsoft Graph API limits to ~4 concurrent connections per mailbox.

@@ -37,6 +37,16 @@ public class TransformOptions
     /// Enable attachment extraction.
     /// </summary>
     public bool EnableAttachments { get; init; } = true;
+
+    /// <summary>
+    /// HTML-specific transformation options.
+    /// </summary>
+    public HtmlTransformOptions? HtmlOptions { get; init; }
+
+    /// <summary>
+    /// Attachment extraction options.
+    /// </summary>
+    public AttachmentExtractOptions? AttachmentOptions { get; init; }
 }
 
 /// <summary>
@@ -61,9 +71,60 @@ public class InlineTransformOptions
     public bool ExtractAttachments { get; init; }
 
     /// <summary>
+    /// HTML-specific transformation options.
+    /// </summary>
+    public HtmlTransformOptions? HtmlOptions { get; init; }
+
+    /// <summary>
+    /// Attachment extraction options.
+    /// </summary>
+    public AttachmentExtractOptions? AttachmentOptions { get; init; }
+
+    /// <summary>
     /// Returns true if any transformation is enabled.
     /// </summary>
     public bool HasAnyTransformation => GenerateHtml || GenerateMarkdown || ExtractAttachments;
+}
+
+/// <summary>
+/// HTML-specific transformation options.
+/// </summary>
+public class HtmlTransformOptions
+{
+    /// <summary>
+    /// Whether to embed CSS styles inline in each HTML file.
+    /// When false, styles are included in a style block in the head.
+    /// </summary>
+    public bool InlineStyles { get; init; }
+
+    /// <summary>
+    /// Whether to strip external image references from HTML.
+    /// When true, removes img tags with http/https sources for privacy.
+    /// </summary>
+    public bool StripExternalImages { get; init; }
+
+    /// <summary>
+    /// Whether to hide CC recipients in HTML/Markdown output.
+    /// </summary>
+    public bool HideCc { get; init; }
+
+    /// <summary>
+    /// Whether to hide BCC recipients in HTML/Markdown output.
+    /// Defaults to true since BCC is rarely stored in received messages.
+    /// </summary>
+    public bool HideBcc { get; init; } = true;
+}
+
+/// <summary>
+/// Attachment extraction options.
+/// </summary>
+public class AttachmentExtractOptions
+{
+    /// <summary>
+    /// Whether to skip extraction of executable files for security.
+    /// Defaults to true.
+    /// </summary>
+    public bool SkipExecutables { get; init; } = true;
 }
 
 /// <summary>

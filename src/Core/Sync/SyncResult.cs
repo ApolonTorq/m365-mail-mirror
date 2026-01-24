@@ -1,3 +1,5 @@
+using M365MailMirror.Core.Transform;
+
 namespace M365MailMirror.Core.Sync;
 
 /// <summary>
@@ -116,6 +118,16 @@ public class SyncOptions
     /// Whether to extract attachments from synced messages.
     /// </summary>
     public bool ExtractAttachments { get; init; }
+
+    /// <summary>
+    /// HTML-specific transformation options.
+    /// </summary>
+    public HtmlTransformOptions? HtmlOptions { get; init; }
+
+    /// <summary>
+    /// Attachment extraction options.
+    /// </summary>
+    public AttachmentExtractOptions? AttachmentOptions { get; init; }
 }
 
 /// <summary>

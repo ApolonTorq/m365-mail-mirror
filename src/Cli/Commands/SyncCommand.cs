@@ -45,14 +45,14 @@ public class SyncCommand : BaseCommand
     [CommandOption("mailbox", 'm', Description = "Email address of mailbox to sync (default: authenticated user)")]
     public string? Mailbox { get; init; }
 
-    [CommandOption("html", Description = "Generate HTML transformations for synced messages")]
-    public bool GenerateHtml { get; init; }
+    [CommandOption("html", Description = "Generate HTML transformations for synced messages (default: from config)")]
+    public bool? GenerateHtml { get; init; }
 
-    [CommandOption("markdown", Description = "Generate Markdown transformations for synced messages")]
-    public bool GenerateMarkdown { get; init; }
+    [CommandOption("markdown", Description = "Generate Markdown transformations for synced messages (default: from config)")]
+    public bool? GenerateMarkdown { get; init; }
 
-    [CommandOption("attachments", Description = "Extract attachments from synced messages")]
-    public bool ExtractAttachments { get; init; }
+    [CommandOption("attachments", Description = "Extract attachments from synced messages (default: from config)")]
+    public bool? ExtractAttachments { get; init; }
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
@@ -69,6 +69,11 @@ public class SyncCommand : BaseCommand
         var parallel = Parallel > 0 ? Parallel : config.Sync.Parallel;
         var excludeFolders = ExcludeFolders.Count > 0 ? ExcludeFolders : config.Sync.ExcludeFolders;
         var mailbox = Mailbox ?? config.Mailbox;
+
+        // Apply transform configuration (CLI flags override config values)
+        var generateHtml = GenerateHtml ?? config.Transform.GenerateHtml;
+        var generateMarkdown = GenerateMarkdown ?? config.Transform.GenerateMarkdown;
+        var extractAttachments = ExtractAttachments ?? config.Transform.ExtractAttachments;
 
         if (string.IsNullOrEmpty(config.ClientId))
         {
@@ -134,7 +139,7 @@ public class SyncCommand : BaseCommand
 
         // Create transformation service only if any transformation flags are set
         ITransformationService? transformationService = null;
-        if (GenerateHtml || GenerateMarkdown || ExtractAttachments)
+        if (generateHtml || generateMarkdown || extractAttachments)
         {
             transformationService = new TransformationService(
                 database,
@@ -145,9 +150,9 @@ public class SyncCommand : BaseCommand
 
             // Log which transformations are enabled
             var enabledTransforms = new List<string>();
-            if (GenerateHtml) enabledTransforms.Add("HTML");
-            if (GenerateMarkdown) enabledTransforms.Add("Markdown");
-            if (ExtractAttachments) enabledTransforms.Add("Attachments");
+            if (generateHtml) enabledTransforms.Add("HTML");
+            if (generateMarkdown) enabledTransforms.Add("Markdown");
+            if (extractAttachments) enabledTransforms.Add("Attachments");
             await console.Output.WriteLineAsync($"Inline transformations: {string.Join(", ", enabledTransforms)}");
             await console.Output.WriteLineAsync();
         }
@@ -163,9 +168,20 @@ public class SyncCommand : BaseCommand
             ExcludeFolders = excludeFolders.ToList(),
             DryRun = DryRun,
             Mailbox = mailbox,
-            GenerateHtml = GenerateHtml,
-            GenerateMarkdown = GenerateMarkdown,
-            ExtractAttachments = ExtractAttachments
+            GenerateHtml = generateHtml,
+            GenerateMarkdown = generateMarkdown,
+            ExtractAttachments = extractAttachments,
+            HtmlOptions = new HtmlTransformOptions
+            {
+                InlineStyles = config.Transform.Html.InlineStyles,
+                StripExternalImages = config.Transform.Html.StripExternalImages,
+                HideCc = config.Transform.Html.HideCc,
+                HideBcc = config.Transform.Html.HideBcc
+            },
+            AttachmentOptions = new AttachmentExtractOptions
+            {
+                SkipExecutables = config.Attachments.SkipExecutables
+            }
         };
 
         // Execute sync with progress reporting
@@ -227,7 +243,7 @@ public class SyncCommand : BaseCommand
         }, cancellationToken);
 
         // Generate navigation indexes if any transformations were enabled
-        if ((GenerateHtml || GenerateMarkdown) && result.Success && result.MessagesSynced > 0)
+        if ((generateHtml || generateMarkdown) && result.Success && result.MessagesSynced > 0)
         {
             await console.Output.WriteLineAsync();
             await console.Output.WriteLineAsync("Generating navigation indexes...");
@@ -236,8 +252,8 @@ public class SyncCommand : BaseCommand
             var indexResult = await indexService.GenerateIndexesAsync(
                 new IndexGenerationOptions
                 {
-                    GenerateHtmlIndexes = GenerateHtml,
-                    GenerateMarkdownIndexes = GenerateMarkdown
+                    GenerateHtmlIndexes = generateHtml,
+                    GenerateMarkdownIndexes = generateMarkdown
                 },
                 cancellationToken);
 

@@ -828,7 +828,9 @@ public class SyncEngine : ISyncEngine
                 {
                     GenerateHtml = options.GenerateHtml,
                     GenerateMarkdown = options.GenerateMarkdown,
-                    ExtractAttachments = options.ExtractAttachments
+                    ExtractAttachments = options.ExtractAttachments,
+                    HtmlOptions = options.HtmlOptions,
+                    AttachmentOptions = options.AttachmentOptions
                 };
 
                 var transformSuccess = await _transformationService.TransformSingleMessageAsync(
