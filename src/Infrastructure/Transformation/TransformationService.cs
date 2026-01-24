@@ -27,8 +27,9 @@ public class TransformationService : ITransformationService
     /// Change this when transformation logic changes.
     /// v2: Added breadcrumb navigation to HTML and Markdown outputs.
     /// v3: Unified transformed/ directory, inline images to images/ folder, cid: rewriting.
+    /// v4: Added optional "View in Outlook" link.
     /// </summary>
-    public const string CurrentConfigVersion = "v3";
+    public const string CurrentConfigVersion = "v4";
 
     /// <summary>
     /// Creates a new TransformationService.
@@ -288,8 +289,8 @@ public class TransformationService : ITransformationService
         // Fetch attachments for this message to include links in the output
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
-        // Generate HTML with attachment links and breadcrumb navigation
-        var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions);
+        // Generate HTML with attachment links, breadcrumb navigation, and optional Outlook link
+        var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions, message.ImmutableId);
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
@@ -311,8 +312,8 @@ public class TransformationService : ITransformationService
         // Fetch attachments for this message to include links in the output
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
-        // Generate Markdown with attachment links and breadcrumb navigation
-        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions);
+        // Generate Markdown with attachment links, breadcrumb navigation, and optional Outlook link
+        var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions, message.ImmutableId);
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
@@ -645,7 +646,7 @@ public class TransformationService : ITransformationService
         };
     }
 
-    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions)
+    private static string GenerateHtml(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions, string? immutableId)
     {
         var body = message.HtmlBody ?? message.TextBody ?? "";
 
@@ -682,6 +683,13 @@ public class TransformationService : ITransformationService
         // Build attachments section
         var attachmentsSection = GenerateAttachmentsHtml(outputPath, attachments);
 
+        // Build Outlook link (if enabled and ImmutableId available)
+        var outlookLink = "";
+        if (htmlOptions?.IncludeOutlookLink == true && !string.IsNullOrEmpty(immutableId))
+        {
+            outlookLink = OutlookLinkHelper.GenerateHtmlLink(immutableId, htmlOptions.Mailbox);
+        }
+
         // Build breadcrumb navigation
         var breadcrumb = BreadcrumbHelper.GenerateHtmlBreadcrumb(outputPath, message.Subject ?? "(no subject)");
 
@@ -717,7 +725,7 @@ public class TransformationService : ITransformationService
             <div><strong>From:</strong> {System.Net.WebUtility.HtmlEncode(message.From?.ToString() ?? "")}</div>
             <div><strong>To:</strong> {System.Net.WebUtility.HtmlEncode(message.To?.ToString() ?? "")}</div>
 {ccLine}{bccLine}            <div><strong>Date:</strong> {message.Date:yyyy-MM-dd HH:mm:ss}</div>
-{attachmentsSection}        </div>
+{outlookLink}{attachmentsSection}        </div>
     </div>
     <div class=""body"">
         {body}
@@ -726,7 +734,7 @@ public class TransformationService : ITransformationService
 </html>";
     }
 
-    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions)
+    private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions, string? immutableId)
     {
         var textBody = message.TextBody ?? "";
 
@@ -757,6 +765,15 @@ public class TransformationService : ITransformationService
         // Build attachments section
         var attachmentsSection = GenerateAttachmentsMarkdown(outputPath, attachments);
 
+        // Build Outlook link (if enabled and ImmutableId available)
+        var outlookFrontMatter = "";
+        var outlookDisplayLine = "";
+        if (htmlOptions?.IncludeOutlookLink == true && !string.IsNullOrEmpty(immutableId))
+        {
+            outlookFrontMatter = OutlookLinkHelper.GenerateMarkdownFrontMatter(immutableId, htmlOptions.Mailbox);
+            outlookDisplayLine = OutlookLinkHelper.GenerateMarkdownDisplayLine(immutableId, htmlOptions.Mailbox);
+        }
+
         // Build breadcrumb navigation
         var breadcrumb = BreadcrumbHelper.GenerateMarkdownBreadcrumb(outputPath, message.Subject ?? "(no subject)");
 
@@ -765,7 +782,7 @@ subject: ""{EscapeYamlString(message.Subject ?? "")}""
 from: ""{EscapeYamlString(message.From?.ToString() ?? "")}""
 to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
 {ccFrontMatter}{bccFrontMatter}date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
----
+{outlookFrontMatter}---
 
 {breadcrumb}
 
@@ -774,7 +791,7 @@ to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
 **From:** {message.From}
 **To:** {message.To}
 {ccLine}{bccLine}**Date:** {message.Date:yyyy-MM-dd HH:mm:ss}
-{attachmentsSection}
+{outlookDisplayLine}{attachmentsSection}
 ---
 
 {textBody}

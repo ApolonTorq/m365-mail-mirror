@@ -176,7 +176,9 @@ public class SyncCommand : BaseCommand
                 InlineStyles = config.Transform.Html.InlineStyles,
                 StripExternalImages = config.Transform.Html.StripExternalImages,
                 HideCc = config.Transform.Html.HideCc,
-                HideBcc = config.Transform.Html.HideBcc
+                HideBcc = config.Transform.Html.HideBcc,
+                IncludeOutlookLink = config.Transform.Html.IncludeOutlookLink,
+                Mailbox = mailbox
             },
             AttachmentOptions = new AttachmentExtractOptions
             {

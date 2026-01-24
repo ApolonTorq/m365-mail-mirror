@@ -190,6 +190,7 @@ transform:
   #   M365_MAIL_MIRROR_TRANSFORM_HTML_STRIP_EXTERNAL_IMAGES
   #   M365_MAIL_MIRROR_TRANSFORM_HTML_HIDE_CC
   #   M365_MAIL_MIRROR_TRANSFORM_HTML_HIDE_BCC
+  #   M365_MAIL_MIRROR_TRANSFORM_HTML_INCLUDE_OUTLOOK_LINK
 
   html:
     # Embed CSS styles in each HTML file (default: false)
@@ -210,6 +211,11 @@ transform:
     # Hide BCC recipients in HTML output (default: true)
     # BCC is rarely stored in received messages anyway.
     hideBcc: true
+
+    # Include "View in Outlook" link in HTML/Markdown output (default: true)
+    # When enabled, adds a clickable link that opens the email in Outlook Web.
+    # Set to false to disable the link.
+    includeOutlookLink: true
 
 
 # =============================================================================

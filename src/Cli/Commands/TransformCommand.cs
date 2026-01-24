@@ -101,7 +101,9 @@ public class TransformCommand : BaseCommand
                 InlineStyles = config.Transform.Html.InlineStyles,
                 StripExternalImages = config.Transform.Html.StripExternalImages,
                 HideCc = config.Transform.Html.HideCc,
-                HideBcc = config.Transform.Html.HideBcc
+                HideBcc = config.Transform.Html.HideBcc,
+                IncludeOutlookLink = config.Transform.Html.IncludeOutlookLink,
+                Mailbox = config.Mailbox
             },
             AttachmentOptions = new AttachmentExtractOptions
             {

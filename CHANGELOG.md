@@ -23,6 +23,8 @@ Feature completion is tracked with checkboxes:
 - [x] **CLI improvements**: Verbose flag (`-v`), configurable log output writers, improved progress reporting
 - [x] **Attachment links in HTML/Markdown output**: Generated HTML and Markdown files now include clickable links to extracted attachments with relative paths and human-readable file sizes
 - [x] **CC/BCC fields in output**: HTML and Markdown transformations now include CC and BCC recipients when present
+- [x] **Configuration-first transformation options** (ADR-010): Transformation settings (HTML, Markdown, attachments) now default from config file with CLI flags as overrides. New options: `inlineStyles`, `stripExternalImages`, `hideCc`, `hideBcc` for HTML; `skipExecutables` for attachments
+- [x] **Outlook Web deep links** (ADR-011): HTML and Markdown outputs include optional "View in Outlook" link using ImmutableId for stable navigation back to source message. Supports both personal and shared mailboxes via `includeOutlookLink` config option
 
 ### Changed
 
@@ -31,6 +33,7 @@ Feature completion is tracked with checkboxes:
 - [x] Folder upsert handles mutable→immutable Graph ID migration (preserves delta tokens)
 - [x] Transformation ordering: Attachments are now extracted before HTML/Markdown generation to ensure attachment links are available
 - [x] Attachment re-extraction: Running transform with `--attachments --force` now deletes existing attachment records and files before re-extracting
+- [x] Transformation config version bumped to v4 (for Outlook link support); run `transform --force` to regenerate existing outputs
 
 ### Fixed
 

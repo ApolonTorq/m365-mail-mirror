@@ -123,6 +123,12 @@ public class HtmlTransformConfiguration
     /// Whether to hide BCC recipients in HTML output. Defaults to true.
     /// </summary>
     public bool HideBcc { get; set; } = true;
+
+    /// <summary>
+    /// Whether to include a "View in Outlook" link in HTML/Markdown output. Defaults to true.
+    /// When enabled, adds a clickable link that opens the email in Outlook Web.
+    /// </summary>
+    public bool IncludeOutlookLink { get; set; } = true;
 }
 
 /// <summary>

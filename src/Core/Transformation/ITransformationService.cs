@@ -113,6 +113,20 @@ public class HtmlTransformOptions
     /// Defaults to true since BCC is rarely stored in received messages.
     /// </summary>
     public bool HideBcc { get; init; } = true;
+
+    /// <summary>
+    /// Whether to include a "View in Outlook" link in the output.
+    /// When enabled, adds a clickable link that opens the email in Outlook Web.
+    /// Defaults to true.
+    /// </summary>
+    public bool IncludeOutlookLink { get; init; } = true;
+
+    /// <summary>
+    /// The mailbox email address for shared mailbox scenarios.
+    /// When set, the Outlook Web link includes the mailbox in the URL path.
+    /// When null or empty, uses the standard personal mailbox URL format.
+    /// </summary>
+    public string? Mailbox { get; init; }
 }
 
 /// <summary>
