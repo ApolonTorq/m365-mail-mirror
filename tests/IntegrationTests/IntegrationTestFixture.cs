@@ -193,7 +193,7 @@ public class IntegrationTestFixture : IAsyncLifetime, IDisposable
                 {
                     ConfigPath = ConfigFilePath,
                     OutputPath = TestOutputPath,
-                    CheckpointInterval = 10,
+                    CheckpointInterval = 10, // Lower than default (50) for faster test execution
                     Parallel = 2,
                     Verbose = IsVerbose, // Use configured log level from integration-test-settings.json
                     GenerateHtml = true, // Enable inline HTML transformation during sync

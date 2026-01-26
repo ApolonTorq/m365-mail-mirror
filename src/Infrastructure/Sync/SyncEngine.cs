@@ -576,18 +576,6 @@ public class SyncEngine : ISyncEngine
                 progress.LastCheckpointAt = DateTimeOffset.UtcNow;
                 await _database.UpsertFolderSyncProgressAsync(progress, cancellationToken);
             }
-
-            // Report progress
-            progressCallback?.Invoke(new SyncProgress
-            {
-                Phase = "Downloading messages",
-                CurrentFolder = folder.FullPath,
-                TotalMessagesInFolder = folder.TotalItemCount,
-                ProcessedMessagesInFolder = synced + skipped,
-                TotalMessagesSynced = synced,
-                CurrentPage = pageNumber,
-                MessagesInCurrentPage = messages.Count
-            });
         }
 
         return (synced, skipped, errors);

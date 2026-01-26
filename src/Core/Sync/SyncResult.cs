@@ -80,9 +80,9 @@ public class SyncOptions
     /// <summary>
     /// Number of messages after which to checkpoint progress during streaming sync.
     /// Lower values provide finer recovery granularity but more database writes.
-    /// Default is 10.
+    /// Default is 50.
     /// </summary>
-    public int CheckpointInterval { get; init; } = 10;
+    public int CheckpointInterval { get; init; } = 50;
 
     /// <summary>
     /// Maximum number of parallel download operations. Default is 4.

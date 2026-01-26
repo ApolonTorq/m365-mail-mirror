@@ -246,7 +246,7 @@ m365-mail-mirror sync --checkpoint-interval 20 --parallel 10
 
 **Options**:
 
-- `--checkpoint-interval <n>`: Messages between checkpoints (default: 10)
+- `--checkpoint-interval <n>`: Messages between checkpoints (default: 50)
 - `--parallel <n>`: Concurrent downloads (default: 5)
 - `--exclude <pattern>`: Skip folders matching glob pattern (can specify multiple, see below)
 - `--dry-run`: Show what would be synced without downloading

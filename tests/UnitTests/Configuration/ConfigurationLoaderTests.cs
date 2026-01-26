@@ -41,7 +41,7 @@ public class ConfigurationLoaderTests : IDisposable
         config.Should().NotBeNull();
         config.TenantId.Should().Be("common");
         config.OutputPath.Should().Be(".");
-        config.Sync.CheckpointInterval.Should().Be(10);
+        config.Sync.CheckpointInterval.Should().Be(50);
         config.Sync.Parallel.Should().Be(5);
         config.Transform.GenerateHtml.Should().BeTrue();
         config.Transform.GenerateMarkdown.Should().BeFalse();
@@ -204,7 +204,7 @@ public class ConfigurationLoaderTests : IDisposable
 
         config.ClientId.Should().Be("partial-client-id");
         config.TenantId.Should().Be("common"); // Default value
-        config.Sync.CheckpointInterval.Should().Be(10); // Default value
+        config.Sync.CheckpointInterval.Should().Be(50); // Default value
         config.Transform.GenerateHtml.Should().BeTrue(); // Default value
     }
 

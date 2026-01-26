@@ -55,7 +55,7 @@ public class SyncConfiguration
     /// Number of messages after which to checkpoint progress during streaming sync.
     /// Lower values provide finer recovery granularity but more database writes.
     /// </summary>
-    public int CheckpointInterval { get; set; } = 10;
+    public int CheckpointInterval { get; set; } = 50;
 
     /// <summary>
     /// Number of parallel downloads.

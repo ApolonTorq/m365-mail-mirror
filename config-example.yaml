@@ -105,11 +105,11 @@ outputPath: "/path/to/your/mail-archive"
 #   M365_MAIL_MIRROR_SYNC_OVERLAP_MINUTES
 
 sync:
-  # Number of messages between progress checkpoints (default: 10)
+  # Number of messages between progress checkpoints (default: 50)
   # Lower values = finer recovery granularity but more database writes.
   # Higher values = less overhead but more re-downloads if interrupted.
-  # Recommended range: 5-50
-  checkpointInterval: 10
+  # Recommended range: 10-100
+  checkpointInterval: 50
 
   # Number of concurrent download threads (default: 5)
   # Microsoft Graph API limits to ~4 concurrent connections per mailbox.

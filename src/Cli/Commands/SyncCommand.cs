@@ -27,8 +27,8 @@ public class SyncCommand : BaseCommand
     [CommandOption("verbose", 'v', Description = "Show detailed debug logging")]
     public bool Verbose { get; init; }
 
-    [CommandOption("checkpoint-interval", 'b', Description = "Number of messages between checkpoints (default: 10)")]
-    public int CheckpointInterval { get; init; } = 10;
+    [CommandOption("checkpoint-interval", 'b', Description = "Number of messages between checkpoints (default: 50)")]
+    public int CheckpointInterval { get; init; } = 50;
 
     [CommandOption("parallel", 'p', Description = "Number of parallel downloads")]
     public int Parallel { get; init; } = 5;

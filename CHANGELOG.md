@@ -35,11 +35,13 @@ Feature completion is tracked with checkboxes:
 - [x] Transformation ordering: Attachments are now extracted before HTML/Markdown generation to ensure attachment links are available
 - [x] Attachment re-extraction: Running transform with `--attachments --force` now deletes existing attachment records and files before re-extracting
 - [x] Transformation config version bumped to v4 (for Outlook link support); run `transform --force` to regenerate existing outputs
+- [x] Increased default checkpoint interval from 10 to 50 to reduce database writes for large mailboxes
 
 ### Fixed
 
 - [x] Thread-safe database disposal with proper locking to prevent race conditions during async cleanup
 - [x] Index file month links now use numeric folder names (e.g., `01/index.html`) instead of month names (`January/index.html`) to match actual directory structure
+- [x] Fixed duplicate progress lines during sync by removing redundant callback from inner checkpoint function
 
 ## [0.1.0] - Initial Release
 
