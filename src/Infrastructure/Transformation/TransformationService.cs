@@ -741,25 +741,38 @@ public class TransformationService : ITransformationService
         // If we only have HTML, strip tags for a basic conversion
         if (string.IsNullOrEmpty(message.TextBody) && !string.IsNullOrEmpty(message.HtmlBody))
         {
-            textBody = StripHtml(message.HtmlBody);
+            textBody = MarkdownCleaningHelper.StripHtml(message.HtmlBody);
         }
+
+        // Apply text cleaning pipeline to handle common transformation artifacts
+        textBody = MarkdownCleaningHelper.CleanCidReferences(textBody);
+        textBody = MarkdownCleaningHelper.CleanOutlookStyleLinks(textBody);
+
+        // Decode HTML entities in headers (Graph API sometimes returns encoded values)
+        var subject = MarkdownCleaningHelper.DecodeHtmlEntities(message.Subject ?? "");
+        var fromAddress = MarkdownCleaningHelper.DecodeHtmlEntities(message.From?.ToString() ?? "");
+        var toAddress = MarkdownCleaningHelper.DecodeHtmlEntities(message.To?.ToString() ?? "");
+
+        // Decode CC/BCC for display
+        var ccAddress = MarkdownCleaningHelper.DecodeHtmlEntities(message.Cc?.ToString() ?? "");
+        var bccAddress = MarkdownCleaningHelper.DecodeHtmlEntities(message.Bcc?.ToString() ?? "");
 
         // Build optional CC fields (respects HideCc config)
         var hideCc = htmlOptions?.HideCc ?? false;
         var ccFrontMatter = !hideCc && message.Cc != null && message.Cc.Count > 0
-            ? $"cc: \"{EscapeYamlString(message.Cc.ToString())}\"\n"
+            ? $"cc: \"{EscapeYamlString(ccAddress)}\"\n"
             : "";
         var ccLine = !hideCc && message.Cc != null && message.Cc.Count > 0
-            ? $"**CC:** {message.Cc}\n"
+            ? $"**CC:** {ccAddress}\n"
             : "";
 
         // Build optional BCC fields (respects HideBcc config, defaults to true)
         var hideBcc = htmlOptions?.HideBcc ?? true;
         var bccFrontMatter = !hideBcc && message.Bcc != null && message.Bcc.Count > 0
-            ? $"bcc: \"{EscapeYamlString(message.Bcc.ToString())}\"\n"
+            ? $"bcc: \"{EscapeYamlString(bccAddress)}\"\n"
             : "";
         var bccLine = !hideBcc && message.Bcc != null && message.Bcc.Count > 0
-            ? $"**BCC:** {message.Bcc}\n"
+            ? $"**BCC:** {bccAddress}\n"
             : "";
 
         // Build attachments section
@@ -774,36 +787,29 @@ public class TransformationService : ITransformationService
             outlookDisplayLine = OutlookLinkHelper.GenerateMarkdownDisplayLine(immutableId, htmlOptions.Mailbox);
         }
 
-        // Build breadcrumb navigation
-        var breadcrumb = BreadcrumbHelper.GenerateMarkdownBreadcrumb(outputPath, message.Subject ?? "(no subject)");
+        // Build breadcrumb navigation (use decoded subject)
+        var displaySubject = string.IsNullOrEmpty(subject) ? "(no subject)" : subject;
+        var breadcrumb = BreadcrumbHelper.GenerateMarkdownBreadcrumb(outputPath, displaySubject);
 
         return $@"---
-subject: ""{EscapeYamlString(message.Subject ?? "")}""
-from: ""{EscapeYamlString(message.From?.ToString() ?? "")}""
-to: ""{EscapeYamlString(message.To?.ToString() ?? "")}""
+subject: ""{EscapeYamlString(subject)}""
+from: ""{EscapeYamlString(fromAddress)}""
+to: ""{EscapeYamlString(toAddress)}""
 {ccFrontMatter}{bccFrontMatter}date: {message.Date:yyyy-MM-ddTHH:mm:sszzz}
 {outlookFrontMatter}---
 
 {breadcrumb}
 
-# {message.Subject ?? "(no subject)"}
+# {displaySubject}
 
-**From:** {message.From}
-**To:** {message.To}
+**From:** {fromAddress}
+**To:** {toAddress}
 {ccLine}{bccLine}**Date:** {message.Date:yyyy-MM-dd HH:mm:ss}
 {outlookDisplayLine}{attachmentsSection}
 ---
 
 {textBody}
 ";
-    }
-
-    private static string StripHtml(string html)
-    {
-        // Simple HTML stripping - for proper conversion, would use a library
-        var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", "");
-        text = System.Net.WebUtility.HtmlDecode(text);
-        return text.Trim();
     }
 
     /// <summary>
