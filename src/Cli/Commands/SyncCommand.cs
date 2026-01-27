@@ -54,6 +54,9 @@ public class SyncCommand : BaseCommand
     [CommandOption("attachments", Description = "Extract attachments from synced messages (default: from config)")]
     public bool? ExtractAttachments { get; init; }
 
+    [CommandOption("no-transform", Description = "Skip all transformations during sync (overrides config and other transform flags)")]
+    public bool NoTransform { get; init; }
+
     protected override async ValueTask ExecuteCommandAsync(IConsole console)
     {
         ConfigureLogging(console, Verbose);
@@ -70,10 +73,10 @@ public class SyncCommand : BaseCommand
         var excludeFolders = ExcludeFolders.Count > 0 ? ExcludeFolders : config.Sync.ExcludeFolders;
         var mailbox = Mailbox ?? config.Mailbox;
 
-        // Apply transform configuration (CLI flags override config values)
-        var generateHtml = GenerateHtml ?? config.Transform.GenerateHtml;
-        var generateMarkdown = GenerateMarkdown ?? config.Transform.GenerateMarkdown;
-        var extractAttachments = ExtractAttachments ?? config.Transform.ExtractAttachments;
+        // Apply transform configuration (--no-transform overrides all other transform settings)
+        var generateHtml = NoTransform ? false : (GenerateHtml ?? config.Transform.GenerateHtml);
+        var generateMarkdown = NoTransform ? false : (GenerateMarkdown ?? config.Transform.GenerateMarkdown);
+        var extractAttachments = NoTransform ? false : (ExtractAttachments ?? config.Transform.ExtractAttachments);
 
         if (string.IsNullOrEmpty(config.ClientId))
         {
