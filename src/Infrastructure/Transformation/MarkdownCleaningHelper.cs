@@ -84,17 +84,17 @@ public static class MarkdownCleaningHelper
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
-    // Pattern to collapse consecutive asterisks (from adjacent bold tags) into nothing
-    // e.g., "text****more" → "text more" or "**text****more**" → "**text more**"
+    // Pattern to separate consecutive asterisks (from adjacent bold tags)
+    // e.g., "**text****more**" → "**text** **more**"
     private static readonly Regex ConsecutiveAsterisksPattern = new(
         @"\*{4,}",
         RegexOptions.Compiled,
         RegexTimeout);
 
-    // Pattern to remove empty bold markers
-    private static readonly Regex EmptyBoldPattern = new(
-        @"\*\*\s*\*\*",
-        RegexOptions.Compiled,
+    // HR tag pattern - horizontal rule tags with optional attributes and self-closing
+    private static readonly Regex HrTagPattern = new(
+        @"<hr[^>]*/?>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
     // Patterns to strip content-bearing tags (style, script, head) entirely
@@ -254,6 +254,10 @@ public static class MarkdownCleaningHelper
     {
         string result = html;
 
+        // Convert HR tags to Markdown separator BEFORE stripping other tags
+        // <hr>, <hr/>, <hr />, <hr tabindex="-1" align="center" ...>
+        result = HrTagPattern.Replace(result, "\n\n---\n\n");
+
         // Strip Office XML tags (like <o:p>, <st1:date>) BEFORE bold conversion
         // These often wrap empty content inside bold tags, causing extra asterisks
         result = OfficeXmlTagPattern.Replace(result, "");
@@ -271,23 +275,22 @@ public static class MarkdownCleaningHelper
             return $"**{content}**";
         });
 
-        // Clean up consecutive asterisks (from adjacent bold tags)
-        result = ConsecutiveAsterisksPattern.Replace(result, " ");
-
-        // Remove empty bold markers
-        result = EmptyBoldPattern.Replace(result, "");
+        // Separate consecutive asterisks (from adjacent bold tags) into proper markdown
+        result = ConsecutiveAsterisksPattern.Replace(result, "** **");
 
         // Convert italic: <i>text</i> or <em>text</em> → *text*
         result = ItalicTagPattern.Replace(result, "*$2*");
 
-        // Convert images: <img src="cid:..."> → ![image](cid:...)
-        result = ImageTagPattern.Replace(result, "![image]($1)");
-
-        // Convert tables to markdown format
+        // Convert tables to markdown format (regular tables)
         result = ConvertTablesToMarkdown(result);
 
-        // Convert numbered lists (Outlook-style table lists)
+        // Convert numbered lists (Outlook-style table lists) BEFORE global image conversion
+        // This allows ProcessListCellContent to detect image-only paragraphs
         result = ConvertOutlookTableListsToMarkdown(result);
+
+        // Convert remaining images: <img src="cid:..."> → ![image](cid:...)
+        // This handles images not inside Outlook table lists
+        result = ImageTagPattern.Replace(result, "![image]($1)");
 
         return result;
     }
@@ -416,12 +419,20 @@ public static class MarkdownCleaningHelper
                     currentNumber = int.Parse(olMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                 }
 
-                // Clean the text content
-                var cleanText = CleanCellContent(textCell);
-                if (!string.IsNullOrWhiteSpace(cleanText))
+                // Process the text cell, separating text from image-only paragraphs
+                var (textContent, separateImages) = ProcessListCellContent(textCell);
+
+                if (!string.IsNullOrWhiteSpace(textContent))
                 {
-                    listItems.Add($"{currentNumber}. {cleanText}");
+                    listItems.Add($"{currentNumber}. {textContent}");
                     currentNumber++;
+                }
+
+                // Add separated images after the list item
+                foreach (var image in separateImages)
+                {
+                    listItems.Add("");  // Blank line to end the list context
+                    listItems.Add(image);
                 }
             }
 
@@ -429,6 +440,81 @@ public static class MarkdownCleaningHelper
 
             return string.Join("\n", listItems);
         });
+    }
+
+    /// <summary>
+    /// Processes list cell content, extracting text and separating image-only paragraphs.
+    /// Images in their own paragraphs are returned separately to be placed after the list item.
+    /// Images inline with text are kept together.
+    /// </summary>
+    private static (string TextContent, List<string> SeparateImages) ProcessListCellContent(string cellHtml)
+    {
+        var separateImages = new List<string>();
+
+        // Pattern to match paragraphs - captures content between <p> tags
+        var paragraphPattern = new Regex(
+            @"<p[^>]*>(.*?)</p>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        // Pattern to strip all tags except <img> - used to detect image-only paragraphs
+        // Real emails often wrap images in <font><span> styling tags
+        var nonImgTagPattern = new Regex(
+            @"<(?!/?(img)\b)[^>]*>",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled,
+            RegexTimeout);
+
+        // Pattern to detect if a paragraph (after stripping non-img tags) contains only images
+        var imageOnlyPattern = new Regex(
+            @"^\s*(<img\s[^>]*>|\s|&nbsp;)+\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        // First convert all images to markdown syntax
+        var processedHtml = ImageTagPattern.Replace(cellHtml, "![image]($1)");
+
+        // Process paragraphs - extract image-only ones
+        var textParts = new List<string>();
+
+        foreach (Match paragraphMatch in paragraphPattern.Matches(cellHtml))
+        {
+            var paragraphContent = paragraphMatch.Groups[1].Value;
+
+            // Strip non-img tags to check if this paragraph is image-only
+            // This handles Outlook's habit of wrapping images in <font><span> tags
+            var strippedContent = nonImgTagPattern.Replace(paragraphContent, "");
+
+            // Check if this paragraph is image-only
+            if (imageOnlyPattern.IsMatch(strippedContent))
+            {
+                // Extract the image markdown from this paragraph
+                var imageMatch = ImageTagPattern.Match(paragraphContent);
+                if (imageMatch.Success)
+                {
+                    separateImages.Add($"![image]({imageMatch.Groups[1].Value})");
+                }
+            }
+            else
+            {
+                // This paragraph has text content - process it
+                // Convert images within it to markdown
+                var processedParagraph = ImageTagPattern.Replace(paragraphContent, "![image]($1)");
+                var cleanedParagraph = CleanCellContent(processedParagraph);
+                if (!string.IsNullOrWhiteSpace(cleanedParagraph))
+                {
+                    textParts.Add(cleanedParagraph);
+                }
+            }
+        }
+
+        // If no paragraphs found, process the whole cell content
+        if (textParts.Count == 0 && separateImages.Count == 0)
+        {
+            var cleanText = CleanCellContent(processedHtml);
+            return (cleanText, separateImages);
+        }
+
+        return (string.Join(" ", textParts), separateImages);
     }
 
     /// <summary>

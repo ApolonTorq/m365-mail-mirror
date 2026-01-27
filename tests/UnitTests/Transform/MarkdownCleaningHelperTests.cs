@@ -825,4 +825,185 @@ function test() { return 1; }
     }
 
     #endregion
+
+    #region HR Tag Conversion Tests
+
+    [Theory]
+    [InlineData("<hr>", "---")]
+    [InlineData("<hr/>", "---")]
+    [InlineData("<hr />", "---")]
+    [InlineData("<HR>", "---")]
+    public void ConvertHtmlToMarkdown_WithSimpleHrTag_ConvertsToMarkdownSeparator(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithHrTagWithAttributes_ConvertsToMarkdownSeparator()
+    {
+        // From the actual Outlook email - HR with tabindex and other attributes
+        var input = @"<hr tabindex=""-1"" align=""center"" width=""100%"" size=""2"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be("---");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithHrBetweenContent_PreservesSeparator()
+    {
+        var input = @"<p>Please advise, in due course.</p>
+<hr tabindex=""-1"">
+<p><b>From:</b> John Doe</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("Please advise");
+        result.Should().Contain("---");
+        result.Should().Contain("**From:**");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleHrTags_ConvertsAll()
+    {
+        var input = @"<p>Section 1</p>
+<hr>
+<p>Section 2</p>
+<hr>
+<p>Section 3</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Count occurrences of "---"
+        var separatorCount = result.Split("---").Length - 1;
+        separatorCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOutlookReplyChainHr_ConvertsSeparators()
+    {
+        // This is the actual Outlook reply chain pattern
+        var input = @"<div class=""OutlookMessageHeader"" dir=""ltr"">
+<hr tabindex=""-1"">
+<font face=""Tahoma"" size=""2""><b>From:</b> sender@example.com</font>
+</div>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("---");
+        result.Should().Contain("**From:**");
+    }
+
+    #endregion
+
+    #region Image Separation in List Items Tests
+
+    [Theory]
+    [InlineData(@"<img src=""cid:test@123"">")]
+    [InlineData(@"<img src=""cid:test@123"" width=""100"">")]
+    [InlineData(@"  <img src=""cid:test@123"">  ")]
+    [InlineData(@"&nbsp;<img src=""cid:test@123"">&nbsp;")]
+    public void ImageOnlyPattern_ShouldMatchImgOnlyContent(string content)
+    {
+        // This tests the internal logic that detects image-only paragraphs
+        var pattern = new System.Text.RegularExpressions.Regex(
+            @"^\s*(<img\s[^>]*>|\s|&nbsp;)+\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        pattern.IsMatch(content).Should().BeTrue($"Pattern should match '{content}'");
+    }
+
+    [Theory]
+    [InlineData(@"Some text <img src=""cid:test@123"">")]
+    [InlineData(@"<img src=""cid:test@123""> and more text")]
+    [InlineData(@"Just text")]
+    public void ImageOnlyPattern_ShouldNotMatchMixedContent(string content)
+    {
+        var pattern = new System.Text.RegularExpressions.Regex(
+            @"^\s*(<img\s[^>]*>|\s|&nbsp;)+\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        pattern.IsMatch(content).Should().BeFalse($"Pattern should not match '{content}'");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithImageInSeparateParagraphInListCell_ShouldSeparateImageFromListItem()
+    {
+        // Image is in its own <p> tag after the list item text - should be on separate line
+        // Note: Real Outlook emails wrap images in <font><span> tags for styling
+        var input = @"<table>
+<tr>
+<td><ol type=""1"" start=""8""><li>&nbsp;</li></ol></td>
+<td>
+<p>Spent time on the icon. Will leave a decision on it once all the other icons have been replaced.</p>
+<p><font face=""Arial"" size=""2""><span style=""FONT-SIZE: 10pt""><img src=""cid:421002300@31012006-05B3"" width=""518"" height=""324""></span></font></p>
+</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The list item text should be on one line
+        result.Should().Contain("8. Spent time on the icon");
+        // The image should be present
+        result.Should().Contain("![image](cid:421002300@31012006-05B3)");
+        // The image should NOT be on the same line as the list item number
+        // In other words, the "8." and the "![image]" should be on different lines
+        var nonEmptyLines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var listItemLine = nonEmptyLines.FirstOrDefault(l => l.StartsWith("8.", StringComparison.Ordinal));
+        listItemLine.Should().NotBeNull();
+        listItemLine.Should().NotContain("![image]");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithImageInlineSameAsParagraph_KeepsOnSameLine()
+    {
+        // Image is in the same <p> tag as text - should stay together
+        var input = @"<table>
+<tr>
+<td><ol type=""1"" start=""5""><li>&nbsp;</li></ol></td>
+<td>
+<p>Here is the icon: <img src=""cid:icon@test""> as you can see.</p>
+</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The image should be inline with the text
+        result.Should().Contain("5. Here is the icon: ![image](cid:icon@test) as you can see.");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleImagesInSeparateParagraphs_ShouldSeparateEach()
+    {
+        // Multiple images, each in their own paragraph
+        var input = @"<table>
+<tr>
+<td><ol type=""1"" start=""5""><li>&nbsp;</li></ol></td>
+<td>
+<p>The report screenshots:</p>
+<p><img src=""cid:image001@test""></p>
+<p><img src=""cid:image002@test""></p>
+</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should have the list item
+        result.Should().Contain("5. The report screenshots:");
+        // Both images should be present
+        result.Should().Contain("![image](cid:image001@test)");
+        result.Should().Contain("![image](cid:image002@test)");
+        // Images should be on separate lines from the list item
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var listItemLine = lines.FirstOrDefault(l => l.StartsWith("5.", StringComparison.Ordinal));
+        listItemLine.Should().NotBeNull();
+        listItemLine.Should().NotContain("![image]");
+    }
+
+    #endregion
 }

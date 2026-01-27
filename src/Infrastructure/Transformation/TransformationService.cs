@@ -632,6 +632,9 @@ public class TransformationService : ITransformationService
                 var fileSize = new FileInfo(fullPath).Length;
 
                 // Record attachment in database
+                // Store ContentId even for regular attachments because some email clients
+                // (like Outlook) mark images as Content-Disposition: attachment but still
+                // reference them via cid: in the HTML body
                 var attachmentEntity = new Attachment
                 {
                     MessageId = message.GraphId,
@@ -640,7 +643,7 @@ public class TransformationService : ITransformationService
                     SizeBytes = fileSize,
                     ContentType = bodyPart.ContentType?.MimeType ?? "application/octet-stream",
                     IsInline = false,
-                    ContentId = null,
+                    ContentId = contentId,
                     Skipped = false,
                     SkipReason = null,
                     ExtractedAt = DateTimeOffset.UtcNow
@@ -767,10 +770,10 @@ public class TransformationService : ITransformationService
             body = $"<pre>{System.Net.WebUtility.HtmlEncode(message.TextBody)}</pre>";
         }
 
-        // Rewrite cid: references to point to extracted inline images
+        // Rewrite cid: references to point to extracted images (inline or attachment)
         if (attachments != null && !string.IsNullOrEmpty(body))
         {
-            body = RewriteCidReferences(body, outputPath, attachments);
+            body = CidRewriteHelper.RewriteCidReferencesHtml(body, outputPath, attachments);
         }
 
         // Strip external images if configured
@@ -860,11 +863,11 @@ public class TransformationService : ITransformationService
             textBody = message.TextBody ?? "";
         }
 
-        // Rewrite cid: references to point to extracted inline images BEFORE cleaning
+        // Rewrite cid: references to point to extracted images (inline or attachment) BEFORE cleaning
         // This converts ![image](cid:xxx) to ![image](images/actual-filename.png)
         if (attachments != null && !string.IsNullOrEmpty(textBody))
         {
-            textBody = RewriteCidReferencesMarkdown(textBody, outputPath, attachments);
+            textBody = CidRewriteHelper.RewriteCidReferencesMarkdown(textBody, outputPath, attachments);
         }
 
         // Apply text cleaning pipeline to handle common transformation artifacts
@@ -937,121 +940,6 @@ to: ""{EscapeYamlString(toAddress)}""
     }
 
     /// <summary>
-    /// Rewrites cid: references in HTML to point to extracted inline images.
-    /// </summary>
-    /// <param name="html">The HTML body content</param>
-    /// <param name="outputPath">The output path of the HTML file (for calculating relative paths)</param>
-    /// <param name="attachments">The list of attachments including inline images with ContentId</param>
-    /// <returns>HTML with cid: references replaced with relative paths to images</returns>
-    private static string RewriteCidReferences(string html, string outputPath, IReadOnlyList<Attachment> attachments)
-    {
-        // Build a mapping from ContentId to file path for inline images
-        var cidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var attachment in attachments)
-        {
-            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId) && !attachment.Skipped && attachment.FilePath != null)
-            {
-                // Calculate relative path from output file to the image
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
-                cidToPath[attachment.ContentId] = relativePath;
-            }
-        }
-
-        if (cidToPath.Count == 0)
-            return html;
-
-        // Replace cid: references with relative paths
-        // Matches: src="cid:xxx" or src='cid:xxx'
-        return System.Text.RegularExpressions.Regex.Replace(
-            html,
-            @"(src\s*=\s*[""'])cid:([^""']+)([""'])",
-            match =>
-            {
-                var prefix = match.Groups[1].Value;
-                var cidValue = match.Groups[2].Value;
-                var suffix = match.Groups[3].Value;
-
-                // Try to find the ContentId (may or may not have angle brackets)
-                var lookupCid = cidValue.Trim();
-                if (cidToPath.TryGetValue(lookupCid, out var relativePath))
-                {
-                    return $"{prefix}{relativePath}{suffix}";
-                }
-
-                // Also try without angle brackets if the cid has them
-                if (lookupCid.StartsWith('<') && lookupCid.EndsWith('>'))
-                {
-                    lookupCid = lookupCid[1..^1];
-                    if (cidToPath.TryGetValue(lookupCid, out relativePath))
-                    {
-                        return $"{prefix}{relativePath}{suffix}";
-                    }
-                }
-
-                // If not found, leave the original reference
-                return match.Value;
-            },
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    }
-
-    /// <summary>
-    /// Rewrites cid: references in Markdown to point to extracted inline images.
-    /// Handles the ![image](cid:xxx) format produced by ConvertHtmlToMarkdown.
-    /// </summary>
-    /// <param name="markdown">The markdown body content</param>
-    /// <param name="outputPath">The output path of the markdown file (for calculating relative paths)</param>
-    /// <param name="attachments">The list of attachments including inline images with ContentId</param>
-    /// <returns>Markdown with cid: references replaced with relative paths to images</returns>
-    private static string RewriteCidReferencesMarkdown(string markdown, string outputPath, IReadOnlyList<Attachment> attachments)
-    {
-        // Build a mapping from ContentId to file path for inline images
-        var cidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var attachment in attachments)
-        {
-            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId) && !attachment.Skipped && attachment.FilePath != null)
-            {
-                // Calculate relative path from output file to the image
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
-                cidToPath[attachment.ContentId] = relativePath;
-            }
-        }
-
-        if (cidToPath.Count == 0)
-            return markdown;
-
-        // Replace cid: references in markdown image syntax: ![alt](cid:xxx)
-        return System.Text.RegularExpressions.Regex.Replace(
-            markdown,
-            @"!\[([^\]]*)\]\(cid:([^)]+)\)",
-            match =>
-            {
-                var altText = match.Groups[1].Value;
-                var cidValue = match.Groups[2].Value;
-
-                // Try to find the ContentId (may or may not have angle brackets)
-                var lookupCid = cidValue.Trim();
-                if (cidToPath.TryGetValue(lookupCid, out var relativePath))
-                {
-                    return $"![{altText}]({relativePath})";
-                }
-
-                // Also try without angle brackets if the cid has them
-                if (lookupCid.StartsWith('<') && lookupCid.EndsWith('>'))
-                {
-                    lookupCid = lookupCid[1..^1];
-                    if (cidToPath.TryGetValue(lookupCid, out relativePath))
-                    {
-                        return $"![{altText}]({relativePath})";
-                    }
-                }
-
-                // If not found, leave the original reference (will be cleaned by CleanCidReferences)
-                return match.Value;
-            },
-            System.Text.RegularExpressions.RegexOptions.None);
-    }
-
-    /// <summary>
     /// Removes external image references (http/https) from HTML content.
     /// Preserves inline images (data: URIs) and relative paths.
     /// </summary>
@@ -1079,48 +967,6 @@ to: ""{EscapeYamlString(toAddress)}""
             filename = filename.Replace(c, '_');
         }
         return filename;
-    }
-
-    /// <summary>
-    /// Calculates the relative path from an output file to an attachment.
-    /// </summary>
-    /// <param name="outputFilePath">Relative path to output file from archive root (e.g., "html/Inbox/2024/01/file.html")</param>
-    /// <param name="attachmentFilePath">Relative path to attachment from archive root</param>
-    /// <returns>Relative path with forward slashes for HTML/Markdown compatibility</returns>
-    private static string CalculateRelativePathToAttachment(string outputFilePath, string attachmentFilePath)
-    {
-        // Get directory containing the output file
-        var outputDir = Path.GetDirectoryName(outputFilePath);
-        if (string.IsNullOrEmpty(outputDir))
-        {
-            return attachmentFilePath.Replace(Path.DirectorySeparatorChar, '/');
-        }
-
-        // Normalize separators for consistent splitting
-        var normalizedOutputDir = outputDir.Replace(Path.DirectorySeparatorChar, '/');
-        var normalizedAttachmentPath = attachmentFilePath.Replace(Path.DirectorySeparatorChar, '/');
-
-        // Split both paths into components
-        var outputParts = normalizedOutputDir.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var attachmentParts = normalizedAttachmentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        // Find common prefix length
-        var commonLength = 0;
-        var minLength = Math.Min(outputParts.Length, attachmentParts.Length);
-        for (var i = 0; i < minLength; i++)
-        {
-            if (outputParts[i].Equals(attachmentParts[i], StringComparison.OrdinalIgnoreCase))
-                commonLength++;
-            else
-                break;
-        }
-
-        // Build relative path: go up from output dir, then down to attachment
-        var upCount = outputParts.Length - commonLength;
-        var upParts = Enumerable.Repeat("..", upCount);
-        var downParts = attachmentParts.Skip(commonLength);
-
-        return string.Join("/", upParts.Concat(downParts));
     }
 
     /// <summary>
@@ -1163,7 +1009,7 @@ to: ""{EscapeYamlString(toAddress)}""
             }
             else
             {
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
+                var relativePath = CidRewriteHelper.CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
                 var sizeFormatted = FormatFileSize(attachment.SizeBytes);
                 sb.AppendLine(CultureInfo.InvariantCulture, $"                    <li><a href=\"{relativePath}\">{displayName}</a> ({sizeFormatted})</li>");
             }
@@ -1200,7 +1046,7 @@ to: ""{EscapeYamlString(toAddress)}""
             }
             else
             {
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
+                var relativePath = CidRewriteHelper.CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
                 var sizeFormatted = FormatFileSize(attachment.SizeBytes);
                 sb.AppendLine(CultureInfo.InvariantCulture, $"- [{attachment.Filename}]({relativePath}) ({sizeFormatted})");
             }

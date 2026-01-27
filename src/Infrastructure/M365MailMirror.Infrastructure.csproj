@@ -5,6 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="M365MailMirror.UnitTests" />
+    <InternalsVisibleTo Include="M365MailMirror.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Core\M365MailMirror.Core.csproj" />
   </ItemGroup>
 
