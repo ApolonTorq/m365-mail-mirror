@@ -125,6 +125,7 @@ When working with this codebase:
 - **Do not treat ADRs as implementation specs** - they document decisions, not implementation
 - **When implementation details conflict**, trust: Source Code > DESIGN.md > ADRs (in that order)
 - **Keep CHANGELOG.md in sync**: When modifying functionality, update the `[Unreleased]` section simultaneously - add entries for new/changed features, remove entries when corresponding functionality is deleted
+- **ALWAYS use test-first development**: Write a failing unit test before fixing bugs or adding features. See [Test-First Development](#test-first-development-mandatory) section - this is mandatory, not optional
 
 ## Core Architecture Concepts
 
@@ -153,6 +154,52 @@ See [README.md](README.md) for command usage and options.
 **Unit tests** run in CI/CD on every PR without tenant access. **Integration and E2E tests** require manual device code authentication and tenant configuration (not in source control).
 
 See [DESIGN.md](DESIGN.md) for detailed testing architecture, test project structure, and CI/CD configuration.
+
+### Test-First Development (MANDATORY)
+
+**When fixing bugs or adding features, you MUST follow test-first development:**
+
+1. **Write a failing unit test first** that reproduces the bug or validates the new behavior
+2. **Run the test and confirm it fails** - this proves the test actually catches the problem
+3. **Then implement the fix** or feature
+4. **Run the test again and confirm it passes**
+
+This approach builds up regression guards over time and ensures tests are meaningful (a test that never failed might not be testing what you think).
+
+**Prefer unit tests over integration tests:**
+
+- Unit tests are fast, isolated, and run in CI without external dependencies
+- Only use integration tests when you genuinely need to test against real Microsoft Graph API behavior
+- If you can mock the dependency and test the logic in isolation, write a unit test
+
+**Existing unit tests are regression guards - do not modify them lightly:**
+
+- **If an existing unit test fails, assume the application code is wrong**, not the test
+- Unit tests capture expected behavior; a failing test usually means you broke something
+- **Only modify an existing unit test when functionality has intentionally changed** (e.g., a deliberate API change, new feature that changes expected output)
+- Before modifying a test, ask yourself: "Did the requirements actually change, or did I introduce a bug?"
+- When in doubt, fix the application code to make the test pass, not the other way around
+
+**Privacy in test data:**
+
+- **NEVER copy real-world example data verbatim** into unit tests (email addresses, names, message content, etc.)
+- When a bug involves real data from testing or user reports, **reproduce the scenario with invented data**
+- Use obviously fake data: `test@example.com`, `John Doe`, `Lorem ipsum` content, etc.
+- The test should capture the structural/behavioral pattern that caused the bug, not the actual private content
+
+**Example workflow for a bug fix:**
+
+```
+1. User reports: "Markdown cleaning breaks on emails with nested tables"
+2. DO NOT copy the user's actual email content into a test
+3. Create a test with invented content that has nested tables:
+   - Made-up sender: "sender@example.com"
+   - Synthetic content with nested table structure that triggers the bug
+4. Run test → confirm it fails
+5. Fix the code
+6. Run test → confirm it passes
+7. Commit both test and fix together
+```
 
 ### Running Integration Tests
 

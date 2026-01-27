@@ -74,6 +74,29 @@ public class MarkdownCleaningHelperTests
         result.Should().Be(expected);
     }
 
+    [Fact]
+    public void CleanCidReferences_PreservesMarkdownImageSyntax()
+    {
+        // After converting HTML images to markdown, cid refs should be preserved in image syntax
+        var input = "Some text ![image](cid:582141002@25042004-2A2D) more text";
+
+        var result = MarkdownCleaningHelper.CleanCidReferences(input);
+
+        // The markdown image syntax should remain intact
+        result.Should().Contain("![image](cid:582141002@25042004-2A2D)");
+    }
+
+    [Fact]
+    public void CleanCidReferences_PreservesMultipleMarkdownImages()
+    {
+        var input = "![img1](cid:image001@test) text ![img2](cid:image002@test)";
+
+        var result = MarkdownCleaningHelper.CleanCidReferences(input);
+
+        result.Should().Contain("![img1](cid:image001@test)");
+        result.Should().Contain("![img2](cid:image002@test)");
+    }
+
     #endregion
 
     #region CleanOutlookStyleLinks Tests
@@ -153,15 +176,15 @@ public class MarkdownCleaningHelperTests
 
     #endregion
 
-    #region StripHtml Tests
+    #region ConvertHtmlToMarkdown Tests
 
     [Theory]
     [InlineData("<p>Hello</p>", "Hello")]
     [InlineData("<div>Content</div>", "Content")]
     [InlineData("<span>Text</span>", "Text")]
-    public void StripHtml_WithSimpleTags_RemovesThem(string input, string expected)
+    public void ConvertHtmlToMarkdown_WithSimpleTags_RemovesThem(string input, string expected)
     {
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be(expected);
     }
@@ -170,9 +193,9 @@ public class MarkdownCleaningHelperTests
     [InlineData("<div><p>Nested</p></div>", "Nested")]
     [InlineData("<span><span>Double</span></span>", "Double")]
     [InlineData("<div><span><p>Triple</p></span></div>", "Triple")]
-    public void StripHtml_WithNestedTags_RemovesAllTags(string input, string expected)
+    public void ConvertHtmlToMarkdown_WithNestedTags_RemovesAllTags(string input, string expected)
     {
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be(expected);
     }
@@ -183,17 +206,17 @@ public class MarkdownCleaningHelperTests
     [InlineData("&gt;", ">")]
     [InlineData("&#39;", "'")]
     [InlineData("&quot;", "\"")]
-    public void StripHtml_WithHtmlEntities_DecodesEntities(string input, string expected)
+    public void ConvertHtmlToMarkdown_WithHtmlEntities_DecodesEntities(string input, string expected)
     {
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be(expected);
     }
 
     [Fact]
-    public void StripHtml_WithNbsp_DecodesAndDoesNotContainOriginal()
+    public void ConvertHtmlToMarkdown_WithNbsp_DecodesAndDoesNotContainOriginal()
     {
-        var result = MarkdownCleaningHelper.StripHtml("Text&nbsp;here");
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown("Text&nbsp;here");
 
         // &nbsp; should be decoded and not remain as literal "&nbsp;"
         result.Should().NotContain("&nbsp;");
@@ -202,11 +225,11 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithMixedContent_StripsTagsAndDecodesEntities()
+    public void ConvertHtmlToMarkdown_WithMixedContent_StripsTagsAndDecodesEntities()
     {
         var input = "<p>Test &amp; Example &lt;tag&gt;</p>";
 
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be("Test & Example <tag>");
     }
@@ -214,9 +237,9 @@ public class MarkdownCleaningHelperTests
     [Theory]
     [InlineData("Line1\n\n\n\n\nLine2", "Line1\n\nLine2")]
     [InlineData("A\n\n\nB\n\n\n\nC", "A\n\nB\n\nC")]
-    public void StripHtml_WithExcessiveNewlines_NormalizesToTwoNewlines(string input, string expected)
+    public void ConvertHtmlToMarkdown_WithExcessiveNewlines_NormalizesToTwoNewlines(string input, string expected)
     {
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be(expected);
     }
@@ -224,19 +247,19 @@ public class MarkdownCleaningHelperTests
     [Theory]
     [InlineData(null, null)]
     [InlineData("", "")]
-    public void StripHtml_WithNullOrEmpty_ReturnsInput(string? input, string? expected)
+    public void ConvertHtmlToMarkdown_WithNullOrEmpty_ReturnsInput(string? input, string? expected)
     {
-        var result = MarkdownCleaningHelper.StripHtml(input!);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input!);
 
         result.Should().Be(expected);
     }
 
     [Fact]
-    public void StripHtml_WithLeadingTrailingWhitespace_Trims()
+    public void ConvertHtmlToMarkdown_WithLeadingTrailingWhitespace_Trims()
     {
         var input = "   <p>Content</p>   ";
 
-        var result = MarkdownCleaningHelper.StripHtml(input);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
 
         result.Should().Be("Content");
     }
@@ -282,10 +305,10 @@ public class MarkdownCleaningHelperTests
 
     #endregion
 
-    #region StripHtml Performance and Safety Tests
+    #region ConvertHtmlToMarkdown Performance and Safety Tests
 
     [Fact]
-    public void StripHtml_WithLargeContent_CompletesWithinReasonableTime()
+    public void ConvertHtmlToMarkdown_WithLargeContent_CompletesWithinReasonableTime()
     {
         // Simulate large content like mxGraph XML with embedded base64 images
         // This pattern mimics URL-encoded mxGraph content with data URIs
@@ -295,7 +318,7 @@ public class MarkdownCleaningHelperTests
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var result = MarkdownCleaningHelper.StripHtml(largeContent);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(largeContent);
 
         stopwatch.Stop();
 
@@ -305,7 +328,7 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithMxGraphLikeUrlEncodedContent_CompletesQuickly()
+    public void ConvertHtmlToMarkdown_WithMxGraphLikeUrlEncodedContent_CompletesQuickly()
     {
         // This mimics the problematic mxGraph XML with URL-encoded data URIs
         // that appeared in Outlook emails causing CPU issues
@@ -317,7 +340,7 @@ public class MarkdownCleaningHelperTests
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var result = MarkdownCleaningHelper.StripHtml(largeContent);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(largeContent);
 
         stopwatch.Stop();
 
@@ -327,14 +350,14 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithDeeplyNestedTags_RespectsIterationLimit()
+    public void ConvertHtmlToMarkdown_WithDeeplyNestedTags_RespectsIterationLimit()
     {
         // Create pathological deeply nested tags
         var nested = new string('<', 200) + "content" + new string('>', 200);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var result = MarkdownCleaningHelper.StripHtml(nested);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(nested);
 
         stopwatch.Stop();
 
@@ -344,14 +367,14 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithContentExceedingMaxLength_TruncatesAndCompletes()
+    public void ConvertHtmlToMarkdown_WithContentExceedingMaxLength_TruncatesAndCompletes()
     {
         // Create content larger than MaxContentLength
         var hugeContent = new string('a', MarkdownCleaningHelper.MaxContentLength + 1000);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var result = MarkdownCleaningHelper.StripHtml(hugeContent);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(hugeContent);
 
         stopwatch.Stop();
 
@@ -361,7 +384,7 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithManySmallTags_CompletesEfficiently()
+    public void ConvertHtmlToMarkdown_WithManySmallTags_CompletesEfficiently()
     {
         // Create HTML with many small tags (common in complex email formatting)
         // Use fewer tags to stay under MaxContentLength (1MB)
@@ -370,7 +393,7 @@ public class MarkdownCleaningHelperTests
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        var result = MarkdownCleaningHelper.StripHtml(manyTags);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(manyTags);
 
         stopwatch.Stop();
 
@@ -380,18 +403,18 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_WithUnbalancedTags_HandlesGracefully()
+    public void ConvertHtmlToMarkdown_WithUnbalancedTags_HandlesGracefully()
     {
         // Unbalanced tags that might cause issues in naive implementations
         var unbalanced = "<div><span><p>Text</div></span></p>";
 
-        var result = MarkdownCleaningHelper.StripHtml(unbalanced);
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(unbalanced);
 
         result.Should().Be("Text");
     }
 
     [Fact]
-    public void StripHtml_MaxIterationsConstant_IsReasonable()
+    public void ConvertHtmlToMarkdown_MaxIterationsConstant_IsReasonable()
     {
         // Verify the constant is exposed and reasonable
         MarkdownCleaningHelper.MaxStripIterations.Should().BeGreaterThan(10);
@@ -399,11 +422,363 @@ public class MarkdownCleaningHelperTests
     }
 
     [Fact]
-    public void StripHtml_MaxContentLengthConstant_IsReasonable()
+    public void ConvertHtmlToMarkdown_MaxContentLengthConstant_IsReasonable()
     {
         // Verify the constant is exposed and reasonable (between 100KB and 100MB)
         MarkdownCleaningHelper.MaxContentLength.Should().BeGreaterThanOrEqualTo(100 * 1024);
         MarkdownCleaningHelper.MaxContentLength.Should().BeLessThan(100 * 1024 * 1024);
+    }
+
+    #endregion
+
+    #region HTML Semantic Structure Tests
+
+    // These tests verify that HTML semantic structures (tables, lists, bold, images)
+    // are properly converted to Markdown equivalents rather than being stripped entirely.
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithSimpleTable_ShouldConvertToMarkdownTable()
+    {
+        // HTML table from the Iris Daily Progress Report email
+        var input = @"<table>
+<tr>
+<td>Iris hours worked today:</td>
+<td>6.5</td>
+</tr>
+<tr>
+<td>Iris hours worked month to date:</td>
+<td>14.5</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected: Markdown table format with columns separated by pipes
+        result.Should().Contain("| Iris hours worked today: | 6.5 |");
+        result.Should().Contain("| Iris hours worked month to date: | 14.5 |");
+        // Must include header separator for proper markdown table rendering
+        result.Should().Contain("| --- | --- |");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTable_ShouldIncludeHeaderSeparatorAfterFirstRow()
+    {
+        var input = @"<table>
+<tr><td>Header 1</td><td>Header 2</td><td>Header 3</td></tr>
+<tr><td>Data 1</td><td>Data 2</td><td>Data 3</td></tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The separator must have the same number of columns as the first row
+        result.Should().Contain("| --- | --- | --- |");
+        // First row should come before separator
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines[0].Should().Contain("Header 1");
+        lines[1].Should().Contain("---");
+        lines[2].Should().Contain("Data 1");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTableContainingNumberedList_ShouldPreserveListFormat()
+    {
+        // Outlook-style numbered list implemented as a table (number in first column, text in second)
+        // This is the actual structure from the Iris Daily Progress Report email
+        var input = @"<table>
+<tr>
+<td><ol type=""1""><li>&nbsp;</li></ol></td>
+<td>Changed the remaining query methods in the Agency class to use the new TorqQueryAttribute approach.</td>
+</tr>
+<tr>
+<td><ol type=""1"" start=""2""><li>&nbsp;</li></ol></td>
+<td>Encountered a fault where a duplicate Agent name would cause an exception in agent payments.</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected: Numbered list with content on same line as number
+        result.Should().Contain("1. Changed the remaining query methods");
+        result.Should().Contain("2. Encountered a fault where a duplicate Agent name");
+    }
+
+    [Theory]
+    [InlineData("<b>Tasks:</b>", "**Tasks:**")]
+    [InlineData("<b>Requests:</b>", "**Requests:**")]
+    [InlineData("<b>Questions:</b>", "**Questions:**")]
+    [InlineData("<b>Notes:</b>", "**Notes:**")]
+    public void ConvertHtmlToMarkdown_WithBoldText_ShouldConvertToMarkdownBold(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected: Bold text converted to markdown ** syntax
+        result.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("<strong>Important</strong>", "**Important**")]
+    [InlineData("<strong>Warning:</strong> Read carefully", "**Warning:** Read carefully")]
+    public void ConvertHtmlToMarkdown_WithStrongText_ShouldConvertToMarkdownBold(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected: Strong text converted to markdown ** syntax
+        result.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("<b>Saturday,\n April 24, 2004</b>", "**Saturday, April 24, 2004**")]
+    [InlineData("<b>Line1\nLine2</b>", "**Line1 Line2**")]
+    [InlineData("<b>  Multiple   spaces  </b>", "**Multiple spaces**")]
+    public void ConvertHtmlToMarkdown_WithBoldContainingWhitespace_NormalizesWhitespace(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("<b>Text</b><b>More</b>", "**Text** **More**")]
+    [InlineData("<b>First</b><o:p></o:p><b>Second</b>", "**First** **Second**")]
+    public void ConvertHtmlToMarkdown_WithConsecutiveBoldTags_DoesNotProduceExtraAsterisks(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should not have 4 or more consecutive asterisks
+        result.Should().NotContain("****");
+        result.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("<o:p></o:p>", "")]
+    [InlineData("<o:p>&nbsp;</o:p>", "")]
+    [InlineData("<st1:date>April 24</st1:date>", "April 24")]
+    [InlineData("Text <o:p>content</o:p> more", "Text content more")]
+    public void ConvertHtmlToMarkdown_WithOfficeXmlTags_StripsOrPreservesContent(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOutlookDatePattern_ProducesCleanOutput()
+    {
+        // This is the actual pattern from the Iris Daily Progress Report that was causing issues
+        var input = @"<b>Saturday,
+ April 24, 2004</b><b><o:p></o:p></b><b><o:p></o:p></b><o:p></o:p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should produce clean bold date without extra asterisks or newlines
+        result.Should().Contain("**Saturday, April 24, 2004**");
+        result.Should().NotContain("****");
+        result.Should().NotContain("\n");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithInlineImageInContent_ShouldPreserveImageReference()
+    {
+        // Inline image from the Iris Daily Progress Report email
+        var input = @"<p>The rest of the day was spent working on the report.</p>
+<p><img src=""cid:582141002@25042004-2A2D"" width=""800"" height=""885""></p>
+<p>More text after the image.</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected: Image should be preserved as a cid reference or placeholder
+        // (The actual path resolution happens elsewhere, but the reference should remain)
+        result.Should().Contain("cid:582141002@25042004-2A2D");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithComplexOutlookEmailStructure_ShouldPreserveReadability()
+    {
+        // Combined structure similar to the actual Iris Daily Progress Report
+        var input = @"<p><b>Tasks:</b></p>
+<table>
+<tr>
+<td><ol type=""1""><li>&nbsp;</li></ol></td>
+<td>First task description with <img src=""cid:image001""> inline.</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Expected behavior for a complete transformation:
+        // 1. Bold heading should be preserved
+        result.Should().Contain("**Tasks:**");
+        // 2. List format should be preserved
+        result.Should().Contain("1. First task description");
+        // 3. Image reference should be preserved
+        result.Should().Contain("cid:image001");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithImageInsideOutlookListTable_ShouldPreserveImageReference()
+    {
+        // Exact structure from the Iris Daily Progress Report email
+        // Note: img tag has id, height attributes BEFORE src
+        var input = @"<table>
+<tr>
+<td><ol type=""1"" start=""5""><li>&nbsp;</li></ol></td>
+<td>
+<p>The rest of the day was spent working on the report.</p>
+<p><img id=""x1"" height=""885"" src=""cid:582141002@25042004-2A2D"" width=""800""></p>
+<p>&nbsp;</p>
+<p><img id=""x2"" height=""697"" src=""cid:582141002@25042004-2A34"" width=""770""></p>
+</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // List item should be numbered correctly
+        result.Should().Contain("5. The rest of the day");
+        // Both images should be preserved with proper markdown syntax
+        result.Should().Contain("![image](cid:582141002@25042004-2A2D)");
+        result.Should().Contain("![image](cid:582141002@25042004-2A34)");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithImageAttributes_ShouldMatchCorrectly()
+    {
+        // Test that image pattern works when src is not the first attribute
+        var input = @"<img id=""_x0000_i1084"" height=""885"" src=""cid:test123"" width=""800"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("![image](cid:test123)");
+    }
+
+    #endregion
+
+    #region CSS and Script Stripping Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithStyleTag_StripsStyleAndContent()
+    {
+        // Outlook emails often contain embedded CSS that shouldn't appear in markdown
+        var input = @"<style type=""text/css"">
+.MsoNormal { font-size: 12pt; margin: 0; }
+P { color: blue; }
+</style>
+<p>Actual content here</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain(".MsoNormal");
+        result.Should().NotContain("font-size");
+        result.Should().NotContain("color: blue");
+        result.Should().Contain("Actual content here");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithHeadTag_StripsHeadAndContent()
+    {
+        // The <head> section with title and meta tags should be stripped
+        var input = @"<html>
+<head>
+<title>Message</title>
+<meta name=""Generator"" content=""Microsoft Word"">
+</head>
+<body>
+<p>Body content</p>
+</body>
+</html>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("Message");
+        result.Should().NotContain("Generator");
+        result.Should().NotContain("Microsoft Word");
+        result.Should().Contain("Body content");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithScriptTag_StripsScriptAndContent()
+    {
+        var input = @"<p>Before</p>
+<script type=""text/javascript"">
+alert('hello');
+function test() { return 1; }
+</script>
+<p>After</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("alert");
+        result.Should().NotContain("function test");
+        result.Should().Contain("Before");
+        result.Should().Contain("After");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithHtmlComments_StripsComments()
+    {
+        var input = @"<p>Visible</p>
+<!-- This is a comment that should be removed -->
+<p>Also visible</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("This is a comment");
+        result.Should().Contain("Visible");
+        result.Should().Contain("Also visible");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithConditionalComments_StripsConditionalComments()
+    {
+        // IE/Office conditional comments like <!--[if !mso]> ... <![endif]-->
+        var input = @"<p>Before</p>
+<!--[if !mso]>
+<style>v\:* { BEHAVIOR: url(#default#VML) }</style>
+<![endif]-->
+<p>After</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("BEHAVIOR");
+        result.Should().NotContain("[if !mso]");
+        result.Should().Contain("Before");
+        result.Should().Contain("After");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithComplexOutlookHtml_ProducesCleanMarkdown()
+    {
+        // Simulates a typical Outlook email with all the cruft
+        var input = @"<html>
+<head>
+<title>Message</title>
+<meta content=""Microsoft Word"" name=""Originator"">
+</head>
+<body>
+<!--[if !mso]>
+<style>v\:* { BEHAVIOR: url(#default#VML) }</style>
+<![endif]-->
+<style>
+.MsoNormal { font-size: 12pt; }
+</style>
+<p><b>Tasks:</b></p>
+<table>
+<tr><td>Item 1</td><td>Value 1</td></tr>
+</table>
+</body>
+</html>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should NOT contain any of the metadata/style content
+        result.Should().NotContain("Microsoft Word");
+        result.Should().NotContain(".MsoNormal");
+        result.Should().NotContain("BEHAVIOR");
+        result.Should().NotContain("font-size");
+
+        // Should contain the actual content converted to markdown
+        result.Should().Contain("**Tasks:**");
+        result.Should().Contain("| Item 1 | Value 1 |");
     }
 
     #endregion
@@ -424,7 +799,7 @@ public class MarkdownCleaningHelperTests
     [Fact]
     public void CleanTextForMarkdown_WithHtml_StripsHtmlAndCleans()
     {
-        // Note: StripHtml removes anything in angle brackets, including <http://...> patterns
+        // Note: ConvertHtmlToMarkdown removes anything in angle brackets, including <http://...> patterns
         // In real HTML emails, URLs are typically in <a href="..."> tags, not bare angle brackets
         var input = "<p>Visit the site &amp; see [cid:image@test]</p>";
 

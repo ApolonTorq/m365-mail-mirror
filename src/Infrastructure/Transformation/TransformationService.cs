@@ -847,15 +847,28 @@ public class TransformationService : ITransformationService
 
     private static string GenerateMarkdown(MimeMessage message, string outputPath, IReadOnlyList<Attachment>? attachments, string folderPath, HtmlTransformOptions? htmlOptions, string? immutableId)
     {
-        var textBody = message.TextBody ?? "";
+        string textBody;
 
-        // If we only have HTML, strip tags for a basic conversion
-        if (string.IsNullOrEmpty(message.TextBody) && !string.IsNullOrEmpty(message.HtmlBody))
+        // Prefer HTML body conversion when available - HTML preserves structure better
+        // (tables, lists, bold, images) compared to text/plain which loses formatting
+        if (!string.IsNullOrEmpty(message.HtmlBody))
         {
-            textBody = MarkdownCleaningHelper.StripHtml(message.HtmlBody);
+            textBody = MarkdownCleaningHelper.ConvertHtmlToMarkdown(message.HtmlBody);
+        }
+        else
+        {
+            textBody = message.TextBody ?? "";
+        }
+
+        // Rewrite cid: references to point to extracted inline images BEFORE cleaning
+        // This converts ![image](cid:xxx) to ![image](images/actual-filename.png)
+        if (attachments != null && !string.IsNullOrEmpty(textBody))
+        {
+            textBody = RewriteCidReferencesMarkdown(textBody, outputPath, attachments);
         }
 
         // Apply text cleaning pipeline to handle common transformation artifacts
+        // CleanCidReferences removes any unresolved cid references that weren't in the attachments list
         textBody = MarkdownCleaningHelper.CleanCidReferences(textBody);
         textBody = MarkdownCleaningHelper.CleanOutlookStyleLinks(textBody);
 
@@ -979,6 +992,63 @@ to: ""{EscapeYamlString(toAddress)}""
                 return match.Value;
             },
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// Rewrites cid: references in Markdown to point to extracted inline images.
+    /// Handles the ![image](cid:xxx) format produced by ConvertHtmlToMarkdown.
+    /// </summary>
+    /// <param name="markdown">The markdown body content</param>
+    /// <param name="outputPath">The output path of the markdown file (for calculating relative paths)</param>
+    /// <param name="attachments">The list of attachments including inline images with ContentId</param>
+    /// <returns>Markdown with cid: references replaced with relative paths to images</returns>
+    private static string RewriteCidReferencesMarkdown(string markdown, string outputPath, IReadOnlyList<Attachment> attachments)
+    {
+        // Build a mapping from ContentId to file path for inline images
+        var cidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var attachment in attachments)
+        {
+            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId) && !attachment.Skipped && attachment.FilePath != null)
+            {
+                // Calculate relative path from output file to the image
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                cidToPath[attachment.ContentId] = relativePath;
+            }
+        }
+
+        if (cidToPath.Count == 0)
+            return markdown;
+
+        // Replace cid: references in markdown image syntax: ![alt](cid:xxx)
+        return System.Text.RegularExpressions.Regex.Replace(
+            markdown,
+            @"!\[([^\]]*)\]\(cid:([^)]+)\)",
+            match =>
+            {
+                var altText = match.Groups[1].Value;
+                var cidValue = match.Groups[2].Value;
+
+                // Try to find the ContentId (may or may not have angle brackets)
+                var lookupCid = cidValue.Trim();
+                if (cidToPath.TryGetValue(lookupCid, out var relativePath))
+                {
+                    return $"![{altText}]({relativePath})";
+                }
+
+                // Also try without angle brackets if the cid has them
+                if (lookupCid.StartsWith('<') && lookupCid.EndsWith('>'))
+                {
+                    lookupCid = lookupCid[1..^1];
+                    if (cidToPath.TryGetValue(lookupCid, out relativePath))
+                    {
+                        return $"![{altText}]({relativePath})";
+                    }
+                }
+
+                // If not found, leave the original reference (will be cleaned by CleanCidReferences)
+                return match.Value;
+            },
+            System.Text.RegularExpressions.RegexOptions.None);
     }
 
     /// <summary>

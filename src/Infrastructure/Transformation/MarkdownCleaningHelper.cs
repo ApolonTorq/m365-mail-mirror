@@ -33,8 +33,10 @@ public static class MarkdownCleaningHelper
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
+    // Negative lookbehind (?<!\]\() prevents matching cid refs inside markdown image syntax ![image](cid:...)
+    // This preserves converted images while removing standalone unresolved cid references
     private static readonly Regex CidUnbracketedPattern = new(
-        @"cid:[^\s\[\]<>]+@[^\s\[\]<>]+",
+        @"(?<!\]\()cid:[^\s\[\]<>()]+@[^\s\[\]<>()]+",
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -57,6 +59,69 @@ public static class MarkdownCleaningHelper
 
     private static readonly Regex OutlookMailtoLinkPattern = new(
         @"([^\s<]+)<(mailto:[^>]+)>",
+        RegexOptions.Compiled,
+        RegexTimeout);
+
+    // HTML to Markdown conversion patterns
+    private static readonly Regex BoldTagPattern = new(
+        @"<(b|strong)>(.*?)</\1>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex ItalicTagPattern = new(
+        @"<(i|em)>(.*?)</\1>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex ImageTagPattern = new(
+        @"<img\s+[^>]*src\s*=\s*[""']([^""']+)[""'][^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Office XML tags like <o:p>, <st1:date>, etc. that should be stripped
+    private static readonly Regex OfficeXmlTagPattern = new(
+        @"</?(?:o|st\d*):[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to collapse consecutive asterisks (from adjacent bold tags) into nothing
+    // e.g., "text****more" → "text more" or "**text****more**" → "**text more**"
+    private static readonly Regex ConsecutiveAsterisksPattern = new(
+        @"\*{4,}",
+        RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to remove empty bold markers
+    private static readonly Regex EmptyBoldPattern = new(
+        @"\*\*\s*\*\*",
+        RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Patterns to strip content-bearing tags (style, script, head) entirely
+    private static readonly Regex StyleTagPattern = new(
+        @"<style[^>]*>[\s\S]*?</style>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex ScriptTagPattern = new(
+        @"<script[^>]*>[\s\S]*?</script>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    private static readonly Regex HeadTagPattern = new(
+        @"<head[^>]*>[\s\S]*?</head>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to match XML/IE conditional comments like <!--[if !mso]> ... <![endif]-->
+    private static readonly Regex ConditionalCommentPattern = new(
+        @"<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to match standard HTML comments
+    private static readonly Regex HtmlCommentPattern = new(
+        @"<!--[\s\S]*?-->",
         RegexOptions.Compiled,
         RegexTimeout);
 
@@ -126,13 +191,14 @@ public static class MarkdownCleaningHelper
     }
 
     /// <summary>
-    /// Strips HTML tags from content and decodes HTML entities.
-    /// Uses multi-pass stripping to handle nested tags.
+    /// Converts HTML content to Markdown, preserving semantic formatting.
+    /// Converts bold, italic, images, tables, and lists to Markdown equivalents,
+    /// then strips remaining HTML tags.
     /// Includes safety limits to prevent CPU-intensive processing on pathological input.
     /// </summary>
-    /// <param name="html">The HTML content to strip</param>
-    /// <returns>Plain text with HTML removed and entities decoded</returns>
-    public static string StripHtml(string html)
+    /// <param name="html">The HTML content to convert</param>
+    /// <returns>Markdown-formatted text with HTML removed and entities decoded</returns>
+    public static string ConvertHtmlToMarkdown(string html)
     {
         if (string.IsNullOrEmpty(html))
             return html;
@@ -142,9 +208,21 @@ public static class MarkdownCleaningHelper
 
         try
         {
-            // Multi-pass HTML stripping to handle nested tags
-            // Limit iterations to prevent pathological regex behavior
             string result = workingContent;
+
+            // Strip non-content sections first (style, script, head, comments)
+            // These contain CSS/JS/metadata that shouldn't appear in markdown
+            result = HeadTagPattern.Replace(result, "");
+            result = StyleTagPattern.Replace(result, "");
+            result = ScriptTagPattern.Replace(result, "");
+            result = ConditionalCommentPattern.Replace(result, "");
+            result = HtmlCommentPattern.Replace(result, "");
+
+            // Convert semantic HTML to Markdown BEFORE stripping tags
+            result = ApplySemanticConversions(result);
+
+            // Multi-pass HTML stripping to handle remaining/nested tags
+            // Limit iterations to prevent pathological regex behavior
             string previous;
             int iterations = 0;
             do
@@ -167,6 +245,204 @@ public static class MarkdownCleaningHelper
             // If regex times out, return decoded content without full HTML stripping
             return System.Net.WebUtility.HtmlDecode(workingContent).Trim();
         }
+    }
+
+    /// <summary>
+    /// Converts semantic HTML elements to their Markdown equivalents.
+    /// </summary>
+    private static string ApplySemanticConversions(string html)
+    {
+        string result = html;
+
+        // Strip Office XML tags (like <o:p>, <st1:date>) BEFORE bold conversion
+        // These often wrap empty content inside bold tags, causing extra asterisks
+        result = OfficeXmlTagPattern.Replace(result, "");
+
+        // Convert bold: <b>text</b> or <strong>text</strong> → **text**
+        // Use a MatchEvaluator to normalize whitespace inside the bold content
+        result = BoldTagPattern.Replace(result, match =>
+        {
+            var content = match.Groups[2].Value;
+            // Normalize internal whitespace (collapse multiple spaces/newlines to single space)
+            content = Regex.Replace(content, @"\s+", " ", RegexOptions.None, RegexTimeout).Trim();
+            // Skip empty bold tags
+            if (string.IsNullOrWhiteSpace(content))
+                return "";
+            return $"**{content}**";
+        });
+
+        // Clean up consecutive asterisks (from adjacent bold tags)
+        result = ConsecutiveAsterisksPattern.Replace(result, " ");
+
+        // Remove empty bold markers
+        result = EmptyBoldPattern.Replace(result, "");
+
+        // Convert italic: <i>text</i> or <em>text</em> → *text*
+        result = ItalicTagPattern.Replace(result, "*$2*");
+
+        // Convert images: <img src="cid:..."> → ![image](cid:...)
+        result = ImageTagPattern.Replace(result, "![image]($1)");
+
+        // Convert tables to markdown format
+        result = ConvertTablesToMarkdown(result);
+
+        // Convert numbered lists (Outlook-style table lists)
+        result = ConvertOutlookTableListsToMarkdown(result);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Converts simple HTML tables to Markdown table format.
+    /// </summary>
+    private static string ConvertTablesToMarkdown(string html)
+    {
+        // Match simple tables without nested structures
+        var tablePattern = new Regex(
+            @"<table[^>]*>(.*?)</table>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        return tablePattern.Replace(html, match =>
+        {
+            var tableContent = match.Groups[1].Value;
+
+            // Check if this looks like an Outlook-style list table (has <ol> inside)
+            if (tableContent.Contains("<ol", StringComparison.OrdinalIgnoreCase))
+            {
+                // Let ConvertOutlookTableListsToMarkdown handle this
+                return match.Value;
+            }
+
+            var rowPattern = new Regex(
+                @"<tr[^>]*>(.*?)</tr>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+                RegexTimeout);
+
+            var cellPattern = new Regex(
+                @"<t[dh][^>]*>(.*?)</t[dh]>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+                RegexTimeout);
+
+            var rows = rowPattern.Matches(tableContent);
+            if (rows.Count == 0) return match.Value;
+
+            var markdownRows = new List<string>();
+            int? columnCount = null;
+            foreach (Match row in rows)
+            {
+                var cells = cellPattern.Matches(row.Groups[1].Value);
+                if (cells.Count == 0) continue;
+
+                var cellTexts = cells.Cast<Match>()
+                    .Select(c => CleanCellContent(c.Groups[1].Value))
+                    .ToList();
+
+                markdownRows.Add("| " + string.Join(" | ", cellTexts) + " |");
+
+                // After the first row, add the header separator row
+                // Markdown tables require |---|---| after the header to render properly
+                if (columnCount == null)
+                {
+                    columnCount = cellTexts.Count;
+                    var separators = Enumerable.Repeat("---", columnCount.Value);
+                    markdownRows.Add("| " + string.Join(" | ", separators) + " |");
+                }
+            }
+
+            if (markdownRows.Count == 0) return match.Value;
+
+            return string.Join("\n", markdownRows);
+        });
+    }
+
+    /// <summary>
+    /// Converts Outlook-style numbered lists implemented as tables to Markdown lists.
+    /// Outlook often renders numbered lists as tables with the number in the first column.
+    /// </summary>
+    private static string ConvertOutlookTableListsToMarkdown(string html)
+    {
+        // Match tables that contain <ol> elements (Outlook list pattern)
+        var tablePattern = new Regex(
+            @"<table[^>]*>(.*?)</table>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        return tablePattern.Replace(html, match =>
+        {
+            var tableContent = match.Groups[1].Value;
+
+            // Only process if this looks like an Outlook list table
+            if (!tableContent.Contains("<ol", StringComparison.OrdinalIgnoreCase))
+            {
+                return match.Value;
+            }
+
+            var rowPattern = new Regex(
+                @"<tr[^>]*>(.*?)</tr>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+                RegexTimeout);
+
+            var cellPattern = new Regex(
+                @"<td[^>]*>(.*?)</td>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+                RegexTimeout);
+
+            // Pattern to extract start number from <ol start="N">
+            var olStartPattern = new Regex(
+                @"<ol[^>]*start\s*=\s*[""']?(\d+)[""']?[^>]*>",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled,
+                RegexTimeout);
+
+            var rows = rowPattern.Matches(tableContent);
+            if (rows.Count == 0) return match.Value;
+
+            var listItems = new List<string>();
+            int currentNumber = 1;
+
+            foreach (Match row in rows)
+            {
+                var cells = cellPattern.Matches(row.Groups[1].Value);
+                if (cells.Count < 2) continue;
+
+                // First cell contains the <ol> with number, second cell contains the text
+                var numberCell = cells[0].Groups[1].Value;
+                var textCell = cells[1].Groups[1].Value;
+
+                // Try to extract the start number from the <ol> tag
+                var olMatch = olStartPattern.Match(numberCell);
+                if (olMatch.Success)
+                {
+                    currentNumber = int.Parse(olMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                // Clean the text content
+                var cleanText = CleanCellContent(textCell);
+                if (!string.IsNullOrWhiteSpace(cleanText))
+                {
+                    listItems.Add($"{currentNumber}. {cleanText}");
+                    currentNumber++;
+                }
+            }
+
+            if (listItems.Count == 0) return match.Value;
+
+            return string.Join("\n", listItems);
+        });
+    }
+
+    /// <summary>
+    /// Cleans cell content by stripping inner HTML tags and trimming whitespace.
+    /// </summary>
+    private static string CleanCellContent(string cellHtml)
+    {
+        // Strip HTML tags from cell content
+        var stripped = HtmlTagPattern.Replace(cellHtml, "");
+        // Decode entities and normalize whitespace
+        stripped = System.Net.WebUtility.HtmlDecode(stripped);
+        // Replace multiple whitespace with single space
+        stripped = Regex.Replace(stripped, @"\s+", " ", RegexOptions.None, RegexTimeout);
+        return stripped.Trim();
     }
 
     /// <summary>
@@ -209,7 +485,7 @@ public static class MarkdownCleaningHelper
 
         if (isHtml)
         {
-            text = StripHtml(text);
+            text = ConvertHtmlToMarkdown(text);
         }
 
         text = CleanCidReferences(text);
