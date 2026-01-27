@@ -110,24 +110,4 @@ public static class SecurityHelper
 
         return true;
     }
-
-    /// <summary>
-    /// Generates a placeholder content for a skipped executable file.
-    /// </summary>
-    /// <param name="originalFilename">The original filename.</param>
-    /// <param name="messagePath">The path to the source message.</param>
-    /// <param name="reason">The reason for skipping.</param>
-    /// <returns>The placeholder file content.</returns>
-    public static string GenerateSkippedPlaceholder(string originalFilename, string? messagePath, string reason)
-    {
-        var extension = Path.GetExtension(originalFilename);
-        return $@"SKIPPED: Executable file not extracted for security reasons
-Filename: {originalFilename}
-Message: {messagePath ?? "Unknown"}
-Reason: {reason}
-Date: {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ssZ}
-
-To extract this file manually, open the EML file in an email client.
-";
-    }
 }

@@ -58,6 +58,11 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     Task<Message?> GetMessageByImmutableIdAsync(string immutableId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets a message by its local file path (relative path to EML file).
+    /// </summary>
+    Task<Message?> GetMessageByLocalPathAsync(string localPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Inserts a new message record.
     /// </summary>
     Task InsertMessageAsync(Message message, CancellationToken cancellationToken = default);
@@ -76,6 +81,20 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     /// Gets all messages in a folder.
     /// </summary>
     Task<IReadOnlyList<Message>> GetMessagesByFolderAsync(string folderPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all messages in a folder and its subfolders (recursive).
+    /// Used for folder-based filtering in transform command.
+    /// </summary>
+    /// <param name="folderPathPrefix">The folder path prefix to match (e.g., "Inbox" matches "Inbox", "Inbox/Subfolder").</param>
+    Task<IReadOnlyList<Message>> GetMessagesByFolderPathPrefixAsync(string folderPathPrefix, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all messages whose local_path starts with the given prefix.
+    /// Used for filesystem-based filtering in transform command (includes year/month paths).
+    /// </summary>
+    /// <param name="localPathPrefix">The local path prefix to match (e.g., "eml/Inbox/2024/01").</param>
+    Task<IReadOnlyList<Message>> GetMessagesByLocalPathPrefixAsync(string localPathPrefix, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets all quarantined messages.
@@ -168,6 +187,14 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     /// Deletes all transformations for a message.
     /// </summary>
     Task DeleteTransformationsForMessageAsync(string messageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes all transformation-related data from the database.
+    /// This includes: transformations, attachments, zip_extractions, and zip_extracted_files.
+    /// Used by the --clean option to reset all transformation state.
+    /// </summary>
+    /// <returns>The total number of records deleted across all tables.</returns>
+    Task<int> ClearAllTransformationDataAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the count of transformations by type.

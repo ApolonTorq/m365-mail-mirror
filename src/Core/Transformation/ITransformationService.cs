@@ -39,6 +39,26 @@ public class TransformOptions
     public bool EnableAttachments { get; init; } = true;
 
     /// <summary>
+    /// Maximum number of messages to transform per transformation type.
+    /// When set to 0 or less, all messages are processed.
+    /// Useful for testing transformation with a limited set.
+    /// </summary>
+    public int MaxMessages { get; init; }
+
+    /// <summary>
+    /// Path filter for transformation (relative to archive root).
+    /// Can be a single EML file path or a folder path.
+    /// When set, only messages matching this path will be transformed.
+    /// </summary>
+    public string? FilterPath { get; init; }
+
+    /// <summary>
+    /// Whether FilterPath refers to a directory (true) or a single file (false).
+    /// When true, all EML files within the directory (recursively) are transformed.
+    /// </summary>
+    public bool FilterPathIsDirectory { get; init; }
+
+    /// <summary>
     /// HTML-specific transformation options.
     /// </summary>
     public HtmlTransformOptions? HtmlOptions { get; init; }
@@ -152,6 +172,11 @@ public class TransformResult
     public required bool Success { get; init; }
 
     /// <summary>
+    /// Whether the operation was cancelled by the user.
+    /// </summary>
+    public bool WasCancelled { get; init; }
+
+    /// <summary>
     /// Number of messages transformed.
     /// </summary>
     public required int MessagesTransformed { get; init; }
@@ -203,6 +228,22 @@ public class TransformResult
             MessagesSkipped = 0,
             Errors = 0,
             ErrorMessage = errorMessage,
+            Elapsed = elapsed
+        };
+    }
+
+    /// <summary>
+    /// Creates a cancelled result (user-initiated cancellation, not an error).
+    /// </summary>
+    public static TransformResult Cancelled(int transformed, int skipped, TimeSpan elapsed)
+    {
+        return new TransformResult
+        {
+            Success = false,
+            WasCancelled = true,
+            MessagesTransformed = transformed,
+            MessagesSkipped = skipped,
+            Errors = 0,
             Elapsed = elapsed
         };
     }

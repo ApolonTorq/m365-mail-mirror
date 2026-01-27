@@ -520,6 +520,8 @@ public class ZipExtractor
         return part;
     }
 
+    private const int MaxCollisionAttempts = 10000;
+
     private static string GetUniqueFilePath(string path)
     {
         if (!File.Exists(path))
@@ -535,6 +537,11 @@ public class ZipExtractor
         string newPath;
         do
         {
+            if (counter > MaxCollisionAttempts)
+            {
+                throw new InvalidOperationException(
+                    $"Unable to find unique file path after {MaxCollisionAttempts} attempts: {path}");
+            }
             newPath = Path.Combine(directory, $"{filename}_{counter}{extension}");
             counter++;
         }

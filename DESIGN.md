@@ -375,7 +375,7 @@ See [ADR-003](decisions/adr-003-eml-first-storage-with-transformations.md) and [
                     <li><em>... and 5 more files</em></li>
                 </ul>
             </li>
-            <li><span class="skipped-attachment" title="Executable file not extracted for security">setup.exe.skipped</span></li>
+            <li><span class="skipped-attachment" title="Executable file not extracted for security">setup.exe (skipped - executable)</span></li>
         </ul>
     </footer>
 </body>
@@ -437,7 +437,7 @@ Email body converted to Markdown...
     - [data/january.csv](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/january.csv)
     - [data/february.csv](attachments/Meeting_Notes_1030_attachments/report.zip_extracted/data/february.csv)
     - ... and 5 more files
-- ⚠️ setup.exe.skipped (executable file not extracted for security)
+- ⚠️ setup.exe (skipped - executable file not extracted for security)
 ```
 
 **Conversion Strategy**:
@@ -497,24 +497,11 @@ To prevent security risks, executable files are filtered during attachment extra
 ```
 1. Check attachment filename extension
 2. If extension in blocked list:
-   a. Log: "Skipped executable attachment: {filename} ({message-id})"
-   b. Create placeholder file: {filename}.skipped with reason
-   c. Record in database: skipped=true, skip_reason='executable'
-   d. Do not extract file content
+   a. Log: "Skipped executable attachment: {filename} (blocked extension: {extension})"
+   b. Record in database: skipped=true, skip_reason='executable:{extension}'
+   c. Do not extract file content (no placeholder file created)
 3. If not blocked:
    a. Extract normally
-```
-
-**Placeholder file format** (`document.exe.skipped`):
-
-```
-SKIPPED: Executable file not extracted for security reasons
-Filename: document.exe
-Message: Meeting_Notes_1030.eml
-Reason: Executable file type (.exe)
-Date: 2024-01-15T10:30:00Z
-
-To extract this file manually, open the EML file in an email client.
 ```
 
 #### ZIP File Extraction
@@ -631,7 +618,7 @@ bool IsSafePath(string zipEntryPath)
 [WARN] Skipped ZIP with executables: installer.zip (contains setup.exe)
 [WARN] Skipped large ZIP: archive.zip (1,523 files exceeds max_files: 100)
 [WARN] Skipped empty ZIP: empty.zip (0 files, min_files: 1)
-[INFO] Skipped executable attachment: virus.exe - created placeholder virus.exe.skipped
+[INFO] Skipped executable attachment: virus.exe (blocked extension: .exe)
 ```
 
 ### Transformation State Tracking
@@ -1183,7 +1170,7 @@ CREATE TABLE attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id TEXT NOT NULL,
     filename TEXT NOT NULL,             -- Original attachment filename
-    file_path TEXT NOT NULL,            -- Relative path from archive root
+    file_path TEXT,                     -- Relative path from archive root (NULL for skipped attachments)
     size_bytes INTEGER NOT NULL,        -- File size in bytes
     content_type TEXT,                  -- MIME content type
     is_inline INTEGER NOT NULL,         -- Boolean: inline vs attachment

@@ -428,3 +428,6 @@ config*.yaml
 
 # Integration test output
 tests/IntegrationTests/output/
+
+# Temporary files
+tmp/

@@ -26,6 +26,7 @@ Feature completion is tracked with checkboxes:
 - [x] **CC/BCC fields in output**: HTML and Markdown transformations now include CC and BCC recipients when present
 - [x] **Configuration-first transformation options** (ADR-010): Transformation settings (HTML, Markdown, attachments) now default from config file with CLI flags as overrides. New options: `inlineStyles`, `stripExternalImages`, `hideCc`, `hideBcc` for HTML; `skipExecutables` for attachments
 - [x] **Outlook Web deep links** (ADR-011): HTML and Markdown outputs include optional "View in Outlook" link using ImmutableId for stable navigation back to source message. Supports both personal and shared mailboxes via `includeOutlookLink` config option
+- [x] **Clean transformation option**: New `--clean` flag for transform command deletes all transformed content (directory and database records) and regenerates from EML files. Requires confirmation prompt unless `--yes` flag is provided for non-interactive use.
 
 ### Changed
 
@@ -36,6 +37,7 @@ Feature completion is tracked with checkboxes:
 - [x] Attachment re-extraction: Running transform with `--attachments --force` now deletes existing attachment records and files before re-extracting
 - [x] Transformation config version bumped to v4 (for Outlook link support); run `transform --force` to regenerate existing outputs
 - [x] Increased default checkpoint interval from 10 to 50 to reduce database writes for large mailboxes
+- [x] Removed `.skipped` placeholder files for blocked executables; skipped attachments are now tracked only in the database and shown in HTML/Markdown output
 
 ### Fixed
 
@@ -105,7 +107,7 @@ Initial version where code was implemented by Claude Code based on the [README](
 
 #### Security Features (ADR-007)
 
-- [x] Executable file filtering (42-extension blocklist, .skipped placeholder files)
+- [x] Executable file filtering (42-extension blocklist, database tracking)
 - [x] ZIP extraction with safety checks (decision tree: size limits, encryption, path validation)
 - [x] Path safety validation (absolute paths, traversal prevention, UNC blocking)
 - [x] Security logging (extraction decisions, skipped files, threat detection)

@@ -22,8 +22,9 @@ public class Attachment
 
     /// <summary>
     /// The relative path to the extracted attachment file from the archive root.
+    /// Null for skipped attachments (no file created on disk).
     /// </summary>
-    public required string FilePath { get; set; }
+    public string? FilePath { get; set; }
 
     /// <summary>
     /// The file size in bytes.

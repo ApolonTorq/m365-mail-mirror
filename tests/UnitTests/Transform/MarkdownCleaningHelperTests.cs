@@ -282,6 +282,132 @@ public class MarkdownCleaningHelperTests
 
     #endregion
 
+    #region StripHtml Performance and Safety Tests
+
+    [Fact]
+    public void StripHtml_WithLargeContent_CompletesWithinReasonableTime()
+    {
+        // Simulate large content like mxGraph XML with embedded base64 images
+        // This pattern mimics URL-encoded mxGraph content with data URIs
+        var largeContent = string.Concat(Enumerable.Repeat(
+            "<div>Some text with &lt;embedded&gt; content</div>",
+            10000));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = MarkdownCleaningHelper.StripHtml(largeContent);
+
+        stopwatch.Stop();
+
+        // Should complete within 5 seconds even with large content
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        result.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void StripHtml_WithMxGraphLikeUrlEncodedContent_CompletesQuickly()
+    {
+        // This mimics the problematic mxGraph XML with URL-encoded data URIs
+        // that appeared in Outlook emails causing CPU issues
+        var mxGraphPattern = "%3CmxGraphModel%3E%3Croot%3E%3CmxCell%20id%3D%220%22%2F%3E" +
+            "image%3Ddata%3Aimage%2Fjpeg%2C%2F9j%2F4AAQSkZJRgABAQAAAQABAAD%2F2wCEAAkGBxQSEhUR";
+
+        // Repeat to simulate large embedded base64 image data
+        var largeContent = string.Concat(Enumerable.Repeat(mxGraphPattern, 5000));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = MarkdownCleaningHelper.StripHtml(largeContent);
+
+        stopwatch.Stop();
+
+        // Should complete quickly since URL-encoded content doesn't match HTML tag pattern
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+        result.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void StripHtml_WithDeeplyNestedTags_RespectsIterationLimit()
+    {
+        // Create pathological deeply nested tags
+        var nested = new string('<', 200) + "content" + new string('>', 200);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = MarkdownCleaningHelper.StripHtml(nested);
+
+        stopwatch.Stop();
+
+        // Should complete within reasonable time due to iteration limit
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+        result.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void StripHtml_WithContentExceedingMaxLength_TruncatesAndCompletes()
+    {
+        // Create content larger than MaxContentLength
+        var hugeContent = new string('a', MarkdownCleaningHelper.MaxContentLength + 1000);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = MarkdownCleaningHelper.StripHtml(hugeContent);
+
+        stopwatch.Stop();
+
+        // Should complete quickly
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        result.Should().Contain("[Content truncated");
+    }
+
+    [Fact]
+    public void StripHtml_WithManySmallTags_CompletesEfficiently()
+    {
+        // Create HTML with many small tags (common in complex email formatting)
+        // Use fewer tags to stay under MaxContentLength (1MB)
+        var manyTags = string.Concat(Enumerable.Range(0, 20000)
+            .Select(i => $"<span class=\"s{i}\">text{i}</span>"));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = MarkdownCleaningHelper.StripHtml(manyTags);
+
+        stopwatch.Stop();
+
+        // Should complete within reasonable time
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        result.Should().NotContain("<span");
+    }
+
+    [Fact]
+    public void StripHtml_WithUnbalancedTags_HandlesGracefully()
+    {
+        // Unbalanced tags that might cause issues in naive implementations
+        var unbalanced = "<div><span><p>Text</div></span></p>";
+
+        var result = MarkdownCleaningHelper.StripHtml(unbalanced);
+
+        result.Should().Be("Text");
+    }
+
+    [Fact]
+    public void StripHtml_MaxIterationsConstant_IsReasonable()
+    {
+        // Verify the constant is exposed and reasonable
+        MarkdownCleaningHelper.MaxStripIterations.Should().BeGreaterThan(10);
+        MarkdownCleaningHelper.MaxStripIterations.Should().BeLessThan(1000);
+    }
+
+    [Fact]
+    public void StripHtml_MaxContentLengthConstant_IsReasonable()
+    {
+        // Verify the constant is exposed and reasonable (between 100KB and 100MB)
+        MarkdownCleaningHelper.MaxContentLength.Should().BeGreaterThanOrEqualTo(100 * 1024);
+        MarkdownCleaningHelper.MaxContentLength.Should().BeLessThan(100 * 1024 * 1024);
+    }
+
+    #endregion
+
     #region CleanTextForMarkdown Tests
 
     [Fact]

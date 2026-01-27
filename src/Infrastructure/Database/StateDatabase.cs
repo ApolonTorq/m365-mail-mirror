@@ -2,6 +2,7 @@ using System.Globalization;
 using M365MailMirror.Core.Database;
 using M365MailMirror.Core.Database.Entities;
 using M365MailMirror.Core.Logging;
+using M365MailMirror.Core.Storage;
 using Microsoft.Data.Sqlite;
 
 namespace M365MailMirror.Infrastructure.Database;
@@ -14,13 +15,14 @@ public class StateDatabase : IStateDatabase
 {
     private readonly string _connectionString;
     private readonly IAppLogger _logger;
+    private readonly SemaphoreSlim _lock = new(1, 1);
     private SqliteConnection? _connection;
     private bool _disposed;
 
     /// <summary>
     /// The current schema version. Increment when making schema changes.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     /// <summary>
     /// The default database filename.
@@ -74,11 +76,87 @@ public class StateDatabase : IStateDatabase
         return _connection;
     }
 
+    /// <summary>
+    /// Executes a database operation with proper locking to ensure thread safety.
+    /// All database operations must go through this method to prevent concurrent access issues.
+    /// </summary>
+    private async Task<T> ExecuteWithLockAsync<T>(Func<SqliteConnection, Task<T>> operation, CancellationToken cancellationToken = default)
+    {
+        await _lock.WaitAsync(cancellationToken);
+        try
+        {
+            var connection = await GetConnectionAsync(cancellationToken);
+            return await operation(connection);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Executes a database operation with proper locking to ensure thread safety (no return value).
+    /// All database operations must go through this method to prevent concurrent access issues.
+    /// </summary>
+    private async Task ExecuteWithLockAsync(Func<SqliteConnection, Task> operation, CancellationToken cancellationToken = default)
+    {
+        await _lock.WaitAsync(cancellationToken);
+        try
+        {
+            var connection = await GetConnectionAsync(cancellationToken);
+            await operation(connection);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     /// <inheritdoc />
     public async Task<int> GetSchemaVersionAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            // Check if schema_version table exists
+            using var checkCmd = connection.CreateCommand();
+            checkCmd.CommandText = @"
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='schema_version'";
 
+            var exists = await checkCmd.ExecuteScalarAsync(cancellationToken);
+            if (exists == null)
+            {
+                return 0;
+            }
+
+            using var versionCmd = connection.CreateCommand();
+            versionCmd.CommandText = "SELECT MAX(version) FROM schema_version";
+            var result = await versionCmd.ExecuteScalarAsync(cancellationToken);
+
+            return result == DBNull.Value || result == null ? 0 : Convert.ToInt32(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        await ExecuteWithLockAsync(async connection =>
+        {
+            var currentVersion = await GetSchemaVersionInternalAsync(connection, cancellationToken);
+
+            if (currentVersion < CurrentSchemaVersion)
+            {
+                _logger.Info("Initializing database schema from version {0} to {1}", currentVersion, CurrentSchemaVersion);
+                await MigrateSchemaInternalAsync(connection, currentVersion, cancellationToken);
+            }
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets schema version without acquiring lock (for use within locked context).
+    /// </summary>
+    private static async Task<int> GetSchemaVersionInternalAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
         // Check if schema_version table exists
         using var checkCmd = connection.CreateCommand();
         checkCmd.CommandText = @"
@@ -98,22 +176,8 @@ public class StateDatabase : IStateDatabase
         return result == DBNull.Value || result == null ? 0 : Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
-    /// <inheritdoc />
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    private async Task MigrateSchemaInternalAsync(SqliteConnection connection, int fromVersion, CancellationToken cancellationToken)
     {
-        var currentVersion = await GetSchemaVersionAsync(cancellationToken);
-
-        if (currentVersion < CurrentSchemaVersion)
-        {
-            _logger.Info("Initializing database schema from version {0} to {1}", currentVersion, CurrentSchemaVersion);
-            await MigrateSchemaAsync(currentVersion, cancellationToken);
-        }
-    }
-
-    private async Task MigrateSchemaAsync(int fromVersion, CancellationToken cancellationToken)
-    {
-        var connection = await GetConnectionAsync(cancellationToken);
-
         using var transaction = connection.BeginTransaction();
         try
         {
@@ -125,6 +189,11 @@ public class StateDatabase : IStateDatabase
             if (fromVersion < 2)
             {
                 await ApplySchemaV2Async(connection, cancellationToken);
+            }
+
+            if (fromVersion < 3)
+            {
+                await ApplySchemaV3Async(connection, cancellationToken);
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -202,7 +271,7 @@ CREATE TABLE IF NOT EXISTS attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id TEXT NOT NULL,
     filename TEXT NOT NULL,
-    file_path TEXT NOT NULL,
+    file_path TEXT,
     size_bytes INTEGER NOT NULL,
     content_type TEXT,
     is_inline INTEGER NOT NULL,
@@ -299,12 +368,60 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         await versionCmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private const string SchemaV3 = @"
+-- Make file_path nullable in attachments table to support skipped attachments
+-- SQLite doesn't support ALTER COLUMN, so we recreate the table
+
+-- Create new table with nullable file_path
+CREATE TABLE attachments_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_path TEXT,
+    size_bytes INTEGER NOT NULL,
+    content_type TEXT,
+    is_inline INTEGER NOT NULL,
+    content_id TEXT,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    skip_reason TEXT,
+    extracted_at TEXT NOT NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(graph_id) ON DELETE CASCADE
+);
+
+-- Copy existing data
+INSERT INTO attachments_new SELECT * FROM attachments;
+
+-- Drop old table
+DROP TABLE attachments;
+
+-- Rename new table
+ALTER TABLE attachments_new RENAME TO attachments;
+
+-- Recreate indexes
+CREATE INDEX idx_attachments_message ON attachments(message_id);
+CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
+";
+
+    private static async Task ApplySchemaV3Async(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SchemaV3;
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+        // Record schema version
+        using var versionCmd = connection.CreateCommand();
+        versionCmd.CommandText = "INSERT INTO schema_version (version) VALUES (3)";
+        await versionCmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     /// <inheritdoc />
     public async Task<IDatabaseTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-        var transaction = connection.BeginTransaction();
-        return new SqliteDatabaseTransaction(transaction);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            var transaction = connection.BeginTransaction();
+            return (IDatabaseTransaction)new SqliteDatabaseTransaction(transaction);
+        }, cancellationToken);
     }
 
     #region Sync State Operations
@@ -312,84 +429,87 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<SyncState?> GetSyncStateAsync(string mailbox, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at
-            FROM sync_state
-            WHERE mailbox = @mailbox";
-        cmd.Parameters.AddWithValue("@mailbox", mailbox);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return new SyncState
-            {
-                Mailbox = reader.GetString(0),
-                LastSyncTime = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
-                LastBatchId = reader.GetInt32(2),
-                LastDeltaToken = reader.IsDBNull(3) ? null : reader.GetString(3),
-                CreatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
-                UpdatedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture)
-            };
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at
+                FROM sync_state
+                WHERE mailbox = @mailbox";
+            cmd.Parameters.AddWithValue("@mailbox", mailbox);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return new SyncState
+                {
+                    Mailbox = reader.GetString(0),
+                    LastSyncTime = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                    LastBatchId = reader.GetInt32(2),
+                    LastDeltaToken = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    CreatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+                    UpdatedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture)
+                };
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task UpsertSyncStateAsync(SyncState syncState, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO sync_state (mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at)
+                VALUES (@mailbox, @lastSyncTime, @lastBatchId, @lastDeltaToken, @createdAt, @updatedAt)
+                ON CONFLICT(mailbox) DO UPDATE SET
+                    last_sync_time = @lastSyncTime,
+                    last_batch_id = @lastBatchId,
+                    last_delta_token = @lastDeltaToken,
+                    updated_at = @updatedAt";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO sync_state (mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at)
-            VALUES (@mailbox, @lastSyncTime, @lastBatchId, @lastDeltaToken, @createdAt, @updatedAt)
-            ON CONFLICT(mailbox) DO UPDATE SET
-                last_sync_time = @lastSyncTime,
-                last_batch_id = @lastBatchId,
-                last_delta_token = @lastDeltaToken,
-                updated_at = @updatedAt";
+            cmd.Parameters.AddWithValue("@mailbox", syncState.Mailbox);
+            cmd.Parameters.AddWithValue("@lastSyncTime", syncState.LastSyncTime.ToString("O"));
+            cmd.Parameters.AddWithValue("@lastBatchId", syncState.LastBatchId);
+            cmd.Parameters.AddWithValue("@lastDeltaToken", (object?)syncState.LastDeltaToken ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@createdAt", syncState.CreatedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("@updatedAt", syncState.UpdatedAt.ToString("O"));
 
-        cmd.Parameters.AddWithValue("@mailbox", syncState.Mailbox);
-        cmd.Parameters.AddWithValue("@lastSyncTime", syncState.LastSyncTime.ToString("O"));
-        cmd.Parameters.AddWithValue("@lastBatchId", syncState.LastBatchId);
-        cmd.Parameters.AddWithValue("@lastDeltaToken", (object?)syncState.LastDeltaToken ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@createdAt", syncState.CreatedAt.ToString("O"));
-        cmd.Parameters.AddWithValue("@updatedAt", syncState.UpdatedAt.ToString("O"));
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<SyncState>> GetAllSyncStatesAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at
-            FROM sync_state
-            ORDER BY mailbox";
-
-        var results = new List<SyncState>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            results.Add(new SyncState
-            {
-                Mailbox = reader.GetString(0),
-                LastSyncTime = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
-                LastBatchId = reader.GetInt32(2),
-                LastDeltaToken = reader.IsDBNull(3) ? null : reader.GetString(3),
-                CreatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
-                UpdatedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture)
-            });
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT mailbox, last_sync_time, last_batch_id, last_delta_token, created_at, updated_at
+                FROM sync_state
+                ORDER BY mailbox";
 
-        return results;
+            var results = new List<SyncState>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                results.Add(new SyncState
+                {
+                    Mailbox = reader.GetString(0),
+                    LastSyncTime = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                    LastBatchId = reader.GetInt32(2),
+                    LastDeltaToken = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    CreatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+                    UpdatedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture)
+                });
+            }
+
+            return (IReadOnlyList<SyncState>)results;
+        }, cancellationToken);
     }
 
     #endregion
@@ -399,201 +519,294 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<Message?> GetMessageAsync(string graphId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                   received_time, size, has_attachments, in_reply_to, conversation_id,
-                   quarantined_at, quarantine_reason, created_at, updated_at
-            FROM messages
-            WHERE graph_id = @graphId";
-        cmd.Parameters.AddWithValue("@graphId", graphId);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadMessage(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE graph_id = @graphId";
+            cmd.Parameters.AddWithValue("@graphId", graphId);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadMessage(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<Message?> GetMessageByImmutableIdAsync(string immutableId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                   received_time, size, has_attachments, in_reply_to, conversation_id,
-                   quarantined_at, quarantine_reason, created_at, updated_at
-            FROM messages
-            WHERE immutable_id = @immutableId";
-        cmd.Parameters.AddWithValue("@immutableId", immutableId);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadMessage(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE immutable_id = @immutableId";
+            cmd.Parameters.AddWithValue("@immutableId", immutableId);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadMessage(reader);
+            }
+
+            return null;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Message?> GetMessageByLocalPathAsync(string localPath, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE local_path = @localPath AND quarantined_at IS NULL";
+            cmd.Parameters.AddWithValue("@localPath", localPath);
+
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadMessage(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task InsertMessageAsync(Message message, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO messages (graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                                      received_time, size, has_attachments, in_reply_to, conversation_id,
+                                      quarantined_at, quarantine_reason, created_at, updated_at)
+                VALUES (@graphId, @immutableId, @localPath, @folderPath, @subject, @sender, @recipients,
+                        @receivedTime, @size, @hasAttachments, @inReplyTo, @conversationId,
+                        @quarantinedAt, @quarantineReason, @createdAt, @updatedAt)";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO messages (graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                                  received_time, size, has_attachments, in_reply_to, conversation_id,
-                                  quarantined_at, quarantine_reason, created_at, updated_at)
-            VALUES (@graphId, @immutableId, @localPath, @folderPath, @subject, @sender, @recipients,
-                    @receivedTime, @size, @hasAttachments, @inReplyTo, @conversationId,
-                    @quarantinedAt, @quarantineReason, @createdAt, @updatedAt)";
-
-        AddMessageParameters(cmd, message);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            AddMessageParameters(cmd, message);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task UpdateMessageAsync(Message message, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE messages SET
+                    immutable_id = @immutableId,
+                    local_path = @localPath,
+                    folder_path = @folderPath,
+                    subject = @subject,
+                    sender = @sender,
+                    recipients = @recipients,
+                    received_time = @receivedTime,
+                    size = @size,
+                    has_attachments = @hasAttachments,
+                    in_reply_to = @inReplyTo,
+                    conversation_id = @conversationId,
+                    quarantined_at = @quarantinedAt,
+                    quarantine_reason = @quarantineReason,
+                    updated_at = @updatedAt
+                WHERE graph_id = @graphId";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            UPDATE messages SET
-                immutable_id = @immutableId,
-                local_path = @localPath,
-                folder_path = @folderPath,
-                subject = @subject,
-                sender = @sender,
-                recipients = @recipients,
-                received_time = @receivedTime,
-                size = @size,
-                has_attachments = @hasAttachments,
-                in_reply_to = @inReplyTo,
-                conversation_id = @conversationId,
-                quarantined_at = @quarantinedAt,
-                quarantine_reason = @quarantineReason,
-                updated_at = @updatedAt
-            WHERE graph_id = @graphId";
-
-        AddMessageParameters(cmd, message);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            AddMessageParameters(cmd, message);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteMessageAsync(string graphId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM messages WHERE graph_id = @graphId";
+            cmd.Parameters.AddWithValue("@graphId", graphId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM messages WHERE graph_id = @graphId";
-        cmd.Parameters.AddWithValue("@graphId", graphId);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Message>> GetMessagesByFolderAsync(string folderPath, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                   received_time, size, has_attachments, in_reply_to, conversation_id,
-                   quarantined_at, quarantine_reason, created_at, updated_at
-            FROM messages
-            WHERE folder_path = @folderPath AND quarantined_at IS NULL
-            ORDER BY received_time DESC";
-        cmd.Parameters.AddWithValue("@folderPath", folderPath);
-
-        var messages = new List<Message>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            messages.Add(ReadMessage(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE folder_path = @folderPath AND quarantined_at IS NULL
+                ORDER BY received_time DESC";
+            cmd.Parameters.AddWithValue("@folderPath", folderPath);
 
-        return messages;
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Message>> GetMessagesByFolderPathPrefixAsync(string folderPathPrefix, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            // Match exact folder or any subfolder (folder_path = prefix OR folder_path LIKE 'prefix/%')
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE (folder_path = @folderPath OR folder_path LIKE @folderPathPattern)
+                  AND quarantined_at IS NULL
+                ORDER BY received_time DESC";
+            cmd.Parameters.AddWithValue("@folderPath", folderPathPrefix);
+            cmd.Parameters.AddWithValue("@folderPathPattern", folderPathPrefix + "/%");
+
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Message>> GetMessagesByLocalPathPrefixAsync(string localPathPrefix, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            // Normalize path separators for consistent matching
+            var normalizedPrefix = localPathPrefix.Replace('\\', '/');
+            // Match local_path that starts with prefix (with trailing slash to avoid partial matches)
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE (REPLACE(local_path, '\', '/') LIKE @localPathPattern)
+                  AND quarantined_at IS NULL
+                ORDER BY received_time DESC";
+            cmd.Parameters.AddWithValue("@localPathPattern", normalizedPrefix + "/%");
+
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Message>> GetQuarantinedMessagesAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                   received_time, size, has_attachments, in_reply_to, conversation_id,
-                   quarantined_at, quarantine_reason, created_at, updated_at
-            FROM messages
-            WHERE quarantined_at IS NOT NULL
-            ORDER BY quarantined_at DESC";
-
-        var messages = new List<Message>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            messages.Add(ReadMessage(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE quarantined_at IS NOT NULL
+                ORDER BY quarantined_at DESC";
 
-        return messages;
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<long> GetMessageCountAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE quarantined_at IS NULL";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE quarantined_at IS NULL";
-
-        var result = await cmd.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<long> GetMessageCountByFolderAsync(string folderPath, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE folder_path = @folderPath AND quarantined_at IS NULL";
+            cmd.Parameters.AddWithValue("@folderPath", folderPath);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE folder_path = @folderPath AND quarantined_at IS NULL";
-        cmd.Parameters.AddWithValue("@folderPath", folderPath);
-
-        var result = await cmd.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetDistinctFolderPathsAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT DISTINCT folder_path
-            FROM messages
-            WHERE quarantined_at IS NULL
-            ORDER BY folder_path";
-
-        var folders = new List<string>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            folders.Add(reader.GetString(0));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT DISTINCT folder_path
+                FROM messages
+                WHERE quarantined_at IS NULL
+                ORDER BY folder_path";
 
-        return folders;
+            var folders = new List<string>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                folders.Add(reader.GetString(0));
+            }
+
+            return (IReadOnlyList<string>)folders;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -601,26 +814,27 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         string folderPath,
         CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT DISTINCT
-                CAST(strftime('%Y', received_time) AS INTEGER) as year,
-                CAST(strftime('%m', received_time) AS INTEGER) as month
-            FROM messages
-            WHERE folder_path = @folderPath AND quarantined_at IS NULL
-            ORDER BY year DESC, month DESC";
-        cmd.Parameters.AddWithValue("@folderPath", folderPath);
-
-        var yearMonths = new List<(int Year, int Month)>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            yearMonths.Add((reader.GetInt32(0), reader.GetInt32(1)));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT DISTINCT
+                    CAST(strftime('%Y', received_time) AS INTEGER) as year,
+                    CAST(strftime('%m', received_time) AS INTEGER) as month
+                FROM messages
+                WHERE folder_path = @folderPath AND quarantined_at IS NULL
+                ORDER BY year DESC, month DESC";
+            cmd.Parameters.AddWithValue("@folderPath", folderPath);
 
-        return yearMonths;
+            var yearMonths = new List<(int Year, int Month)>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                yearMonths.Add((reader.GetInt32(0), reader.GetInt32(1)));
+            }
+
+            return (IReadOnlyList<(int Year, int Month)>)yearMonths;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -630,31 +844,32 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         int month,
         CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
-                   received_time, size, has_attachments, in_reply_to, conversation_id,
-                   quarantined_at, quarantine_reason, created_at, updated_at
-            FROM messages
-            WHERE folder_path = @folderPath
-              AND quarantined_at IS NULL
-              AND CAST(strftime('%Y', received_time) AS INTEGER) = @year
-              AND CAST(strftime('%m', received_time) AS INTEGER) = @month
-            ORDER BY received_time DESC";
-        cmd.Parameters.AddWithValue("@folderPath", folderPath);
-        cmd.Parameters.AddWithValue("@year", year);
-        cmd.Parameters.AddWithValue("@month", month);
-
-        var messages = new List<Message>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            messages.Add(ReadMessage(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE folder_path = @folderPath
+                  AND quarantined_at IS NULL
+                  AND CAST(strftime('%Y', received_time) AS INTEGER) = @year
+                  AND CAST(strftime('%m', received_time) AS INTEGER) = @month
+                ORDER BY received_time DESC";
+            cmd.Parameters.AddWithValue("@folderPath", folderPath);
+            cmd.Parameters.AddWithValue("@year", year);
+            cmd.Parameters.AddWithValue("@month", month);
 
-        return messages;
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
     }
 
     private static Message ReadMessage(SqliteDataReader reader)
@@ -663,7 +878,8 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         {
             GraphId = reader.GetString(0),
             ImmutableId = reader.GetString(1),
-            LocalPath = reader.GetString(2),
+            // Apply NFC normalization for consistent filesystem path matching
+            LocalPath = PathNormalizationHelper.NormalizePath(reader.GetString(2)),
             FolderPath = reader.GetString(3),
             Subject = reader.IsDBNull(4) ? null : reader.GetString(4),
             Sender = reader.IsDBNull(5) ? null : reader.GetString(5),
@@ -707,148 +923,153 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<Folder?> GetFolderAsync(string graphId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, parent_folder_id, local_path, display_name,
-                   total_item_count, unread_item_count, delta_token, last_sync_time,
-                   created_at, updated_at
-            FROM folders
-            WHERE graph_id = @graphId";
-        cmd.Parameters.AddWithValue("@graphId", graphId);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadFolder(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, parent_folder_id, local_path, display_name,
+                       total_item_count, unread_item_count, delta_token, last_sync_time,
+                       created_at, updated_at
+                FROM folders
+                WHERE graph_id = @graphId";
+            cmd.Parameters.AddWithValue("@graphId", graphId);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadFolder(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<Folder?> GetFolderByPathAsync(string localPath, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, parent_folder_id, local_path, display_name,
-                   total_item_count, unread_item_count, delta_token, last_sync_time,
-                   created_at, updated_at
-            FROM folders
-            WHERE local_path = @localPath";
-        cmd.Parameters.AddWithValue("@localPath", localPath);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadFolder(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, parent_folder_id, local_path, display_name,
+                       total_item_count, unread_item_count, delta_token, last_sync_time,
+                       created_at, updated_at
+                FROM folders
+                WHERE local_path = @localPath";
+            cmd.Parameters.AddWithValue("@localPath", localPath);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadFolder(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Folder>> GetAllFoldersAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT graph_id, parent_folder_id, local_path, display_name,
-                   total_item_count, unread_item_count, delta_token, last_sync_time,
-                   created_at, updated_at
-            FROM folders
-            ORDER BY local_path";
-
-        var folders = new List<Folder>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            folders.Add(ReadFolder(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, parent_folder_id, local_path, display_name,
+                       total_item_count, unread_item_count, delta_token, last_sync_time,
+                       created_at, updated_at
+                FROM folders
+                ORDER BY local_path";
 
-        return folders;
+            var folders = new List<Folder>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                folders.Add(ReadFolder(reader));
+            }
+
+            return (IReadOnlyList<Folder>)folders;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task UpsertFolderAsync(Folder folder, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        // Handle migration from mutable to immutable folder IDs:
-        // If a folder exists with the same local_path but different graph_id,
-        // copy its delta_token and last_sync_time before deleting it
-        using (var selectCmd = connection.CreateCommand())
+        await ExecuteWithLockAsync(async connection =>
         {
-            selectCmd.CommandText = @"
-                SELECT delta_token, last_sync_time FROM folders
-                WHERE local_path = @localPath AND graph_id != @graphId";
-            selectCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
-            selectCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
-
-            using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken);
-            if (await reader.ReadAsync(cancellationToken))
+            // Handle migration from mutable to immutable folder IDs:
+            // If a folder exists with the same local_path but different graph_id,
+            // copy its delta_token and last_sync_time before deleting it
+            using (var selectCmd = connection.CreateCommand())
             {
-                // Copy delta_token and last_sync_time from old record if not already set
-                folder.DeltaToken ??= reader.IsDBNull(0) ? null : reader.GetString(0);
-                folder.LastSyncTime ??= reader.IsDBNull(1) ? null : DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture);
+                selectCmd.CommandText = @"
+                    SELECT delta_token, last_sync_time FROM folders
+                    WHERE local_path = @localPath AND graph_id != @graphId";
+                selectCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
+                selectCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
+
+                using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    // Copy delta_token and last_sync_time from old record if not already set
+                    folder.DeltaToken ??= reader.IsDBNull(0) ? null : reader.GetString(0);
+                    folder.LastSyncTime ??= reader.IsDBNull(1) ? null : DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture);
+                }
             }
-        }
 
-        // Delete the old record with different graph_id
-        using (var deleteCmd = connection.CreateCommand())
-        {
-            deleteCmd.CommandText = "DELETE FROM folders WHERE local_path = @localPath AND graph_id != @graphId";
-            deleteCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
-            deleteCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
-            await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+            // Delete the old record with different graph_id
+            using (var deleteCmd = connection.CreateCommand())
+            {
+                deleteCmd.CommandText = "DELETE FROM folders WHERE local_path = @localPath AND graph_id != @graphId";
+                deleteCmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
+                deleteCmd.Parameters.AddWithValue("@graphId", folder.GraphId);
+                await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO folders (graph_id, parent_folder_id, local_path, display_name,
-                                 total_item_count, unread_item_count, delta_token, last_sync_time,
-                                 created_at, updated_at)
-            VALUES (@graphId, @parentFolderId, @localPath, @displayName,
-                    @totalItemCount, @unreadItemCount, @deltaToken, @lastSyncTime,
-                    @createdAt, @updatedAt)
-            ON CONFLICT(graph_id) DO UPDATE SET
-                parent_folder_id = @parentFolderId,
-                local_path = @localPath,
-                display_name = @displayName,
-                total_item_count = @totalItemCount,
-                unread_item_count = @unreadItemCount,
-                delta_token = COALESCE(@deltaToken, folders.delta_token),
-                last_sync_time = COALESCE(@lastSyncTime, folders.last_sync_time),
-                updated_at = @updatedAt";
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO folders (graph_id, parent_folder_id, local_path, display_name,
+                                     total_item_count, unread_item_count, delta_token, last_sync_time,
+                                     created_at, updated_at)
+                VALUES (@graphId, @parentFolderId, @localPath, @displayName,
+                        @totalItemCount, @unreadItemCount, @deltaToken, @lastSyncTime,
+                        @createdAt, @updatedAt)
+                ON CONFLICT(graph_id) DO UPDATE SET
+                    parent_folder_id = @parentFolderId,
+                    local_path = @localPath,
+                    display_name = @displayName,
+                    total_item_count = @totalItemCount,
+                    unread_item_count = @unreadItemCount,
+                    delta_token = COALESCE(@deltaToken, folders.delta_token),
+                    last_sync_time = COALESCE(@lastSyncTime, folders.last_sync_time),
+                    updated_at = @updatedAt";
 
-        cmd.Parameters.AddWithValue("@graphId", folder.GraphId);
-        cmd.Parameters.AddWithValue("@parentFolderId", (object?)folder.ParentFolderId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
-        cmd.Parameters.AddWithValue("@displayName", folder.DisplayName);
-        cmd.Parameters.AddWithValue("@totalItemCount", folder.TotalItemCount.HasValue ? folder.TotalItemCount.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@unreadItemCount", folder.UnreadItemCount.HasValue ? folder.UnreadItemCount.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@deltaToken", (object?)folder.DeltaToken ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@lastSyncTime", folder.LastSyncTime.HasValue ? folder.LastSyncTime.Value.ToString("O") : DBNull.Value);
-        cmd.Parameters.AddWithValue("@createdAt", folder.CreatedAt.ToString("O"));
-        cmd.Parameters.AddWithValue("@updatedAt", folder.UpdatedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("@graphId", folder.GraphId);
+            cmd.Parameters.AddWithValue("@parentFolderId", (object?)folder.ParentFolderId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@localPath", folder.LocalPath);
+            cmd.Parameters.AddWithValue("@displayName", folder.DisplayName);
+            cmd.Parameters.AddWithValue("@totalItemCount", folder.TotalItemCount.HasValue ? folder.TotalItemCount.Value : DBNull.Value);
+            cmd.Parameters.AddWithValue("@unreadItemCount", folder.UnreadItemCount.HasValue ? folder.UnreadItemCount.Value : DBNull.Value);
+            cmd.Parameters.AddWithValue("@deltaToken", (object?)folder.DeltaToken ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@lastSyncTime", folder.LastSyncTime.HasValue ? folder.LastSyncTime.Value.ToString("O") : DBNull.Value);
+            cmd.Parameters.AddWithValue("@createdAt", folder.CreatedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("@updatedAt", folder.UpdatedAt.ToString("O"));
 
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteFolderAsync(string graphId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM folders WHERE graph_id = @graphId";
+            cmd.Parameters.AddWithValue("@graphId", graphId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM folders WHERE graph_id = @graphId";
-        cmd.Parameters.AddWithValue("@graphId", graphId);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     private static Folder ReadFolder(SqliteDataReader reader)
@@ -857,7 +1078,8 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         {
             GraphId = reader.GetString(0),
             ParentFolderId = reader.IsDBNull(1) ? null : reader.GetString(1),
-            LocalPath = reader.GetString(2),
+            // Apply NFC normalization for consistent filesystem path matching
+            LocalPath = PathNormalizationHelper.NormalizePath(reader.GetString(2)),
             DisplayName = reader.GetString(3),
             TotalItemCount = reader.IsDBNull(4) ? null : reader.GetInt32(4),
             UnreadItemCount = reader.IsDBNull(5) ? null : reader.GetInt32(5),
@@ -875,93 +1097,156 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<Transformation?> GetTransformationAsync(string messageId, string transformationType, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT message_id, transformation_type, applied_at, config_version, output_path
-            FROM transformations
-            WHERE message_id = @messageId AND transformation_type = @transformationType";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
-        cmd.Parameters.AddWithValue("@transformationType", transformationType);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadTransformation(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT message_id, transformation_type, applied_at, config_version, output_path
+                FROM transformations
+                WHERE message_id = @messageId AND transformation_type = @transformationType";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
+            cmd.Parameters.AddWithValue("@transformationType", transformationType);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadTransformation(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Transformation>> GetTransformationsForMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT message_id, transformation_type, applied_at, config_version, output_path
-            FROM transformations
-            WHERE message_id = @messageId";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
-
-        var transformations = new List<Transformation>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            transformations.Add(ReadTransformation(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT message_id, transformation_type, applied_at, config_version, output_path
+                FROM transformations
+                WHERE message_id = @messageId";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
 
-        return transformations;
+            var transformations = new List<Transformation>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                transformations.Add(ReadTransformation(reader));
+            }
+
+            return (IReadOnlyList<Transformation>)transformations;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task UpsertTransformationAsync(Transformation transformation, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO transformations (message_id, transformation_type, applied_at, config_version, output_path)
+                VALUES (@messageId, @transformationType, @appliedAt, @configVersion, @outputPath)
+                ON CONFLICT(message_id, transformation_type) DO UPDATE SET
+                    applied_at = @appliedAt,
+                    config_version = @configVersion,
+                    output_path = @outputPath";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO transformations (message_id, transformation_type, applied_at, config_version, output_path)
-            VALUES (@messageId, @transformationType, @appliedAt, @configVersion, @outputPath)
-            ON CONFLICT(message_id, transformation_type) DO UPDATE SET
-                applied_at = @appliedAt,
-                config_version = @configVersion,
-                output_path = @outputPath";
+            cmd.Parameters.AddWithValue("@messageId", transformation.MessageId);
+            cmd.Parameters.AddWithValue("@transformationType", transformation.TransformationType);
+            cmd.Parameters.AddWithValue("@appliedAt", transformation.AppliedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("@configVersion", transformation.ConfigVersion);
+            cmd.Parameters.AddWithValue("@outputPath", transformation.OutputPath);
 
-        cmd.Parameters.AddWithValue("@messageId", transformation.MessageId);
-        cmd.Parameters.AddWithValue("@transformationType", transformation.TransformationType);
-        cmd.Parameters.AddWithValue("@appliedAt", transformation.AppliedAt.ToString("O"));
-        cmd.Parameters.AddWithValue("@configVersion", transformation.ConfigVersion);
-        cmd.Parameters.AddWithValue("@outputPath", transformation.OutputPath);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteTransformationsForMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM transformations WHERE message_id = @messageId";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM transformations WHERE message_id = @messageId";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
+    }
 
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    /// <inheritdoc />
+    public async Task<int> ClearAllTransformationDataAsync(CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            var totalDeleted = 0;
+
+            // Use transaction for atomicity
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                // Delete in order to respect foreign key constraints:
+                // 1. zip_extracted_files (FK -> zip_extractions)
+                // 2. zip_extractions (FK -> attachments, messages)
+                // 3. attachments (FK -> messages)
+                // 4. transformations (FK -> messages)
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = "DELETE FROM zip_extracted_files";
+                    totalDeleted += await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = "DELETE FROM zip_extractions";
+                    totalDeleted += await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = "DELETE FROM attachments";
+                    totalDeleted += await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = "DELETE FROM transformations";
+                    totalDeleted += await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                transaction.Commit();
+                _logger.Info("Cleared all transformation data: {0} records deleted", totalDeleted);
+                return totalDeleted;
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                _logger.Error(ex, "Failed to clear transformation data");
+                throw;
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<long> GetTransformationCountByTypeAsync(string transformationType, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM transformations WHERE transformation_type = @transformationType";
+            cmd.Parameters.AddWithValue("@transformationType", transformationType);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM transformations WHERE transformation_type = @transformationType";
-        cmd.Parameters.AddWithValue("@transformationType", transformationType);
-
-        var result = await cmd.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -970,30 +1255,31 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         string currentConfigVersion,
         CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT m.graph_id, m.immutable_id, m.local_path, m.folder_path, m.subject, m.sender, m.recipients,
-                   m.received_time, m.size, m.has_attachments, m.in_reply_to, m.conversation_id,
-                   m.quarantined_at, m.quarantine_reason, m.created_at, m.updated_at
-            FROM messages m
-            LEFT JOIN transformations t ON m.graph_id = t.message_id AND t.transformation_type = @transformationType
-            WHERE m.quarantined_at IS NULL
-              AND (t.message_id IS NULL OR t.config_version != @configVersion)
-            ORDER BY m.received_time DESC";
-
-        cmd.Parameters.AddWithValue("@transformationType", transformationType);
-        cmd.Parameters.AddWithValue("@configVersion", currentConfigVersion);
-
-        var messages = new List<Message>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            messages.Add(ReadMessage(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT m.graph_id, m.immutable_id, m.local_path, m.folder_path, m.subject, m.sender, m.recipients,
+                       m.received_time, m.size, m.has_attachments, m.in_reply_to, m.conversation_id,
+                       m.quarantined_at, m.quarantine_reason, m.created_at, m.updated_at
+                FROM messages m
+                LEFT JOIN transformations t ON m.graph_id = t.message_id AND t.transformation_type = @transformationType
+                WHERE m.quarantined_at IS NULL
+                  AND (t.message_id IS NULL OR t.config_version != @configVersion)
+                ORDER BY m.received_time DESC";
 
-        return messages;
+            cmd.Parameters.AddWithValue("@transformationType", transformationType);
+            cmd.Parameters.AddWithValue("@configVersion", currentConfigVersion);
+
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
     }
 
     private static Transformation ReadTransformation(SqliteDataReader reader)
@@ -1015,88 +1301,92 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<IReadOnlyList<Attachment>> GetAttachmentsForMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT id, message_id, filename, file_path, size_bytes, content_type,
-                   is_inline, content_id, skipped, skip_reason, extracted_at
-            FROM attachments
-            WHERE message_id = @messageId
-            ORDER BY id";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
-
-        var attachments = new List<Attachment>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            attachments.Add(ReadAttachment(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT id, message_id, filename, file_path, size_bytes, content_type,
+                       is_inline, content_id, skipped, skip_reason, extracted_at
+                FROM attachments
+                WHERE message_id = @messageId
+                ORDER BY id";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
 
-        return attachments;
+            var attachments = new List<Attachment>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                attachments.Add(ReadAttachment(reader));
+            }
+
+            return (IReadOnlyList<Attachment>)attachments;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<long> InsertAttachmentAsync(Attachment attachment, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO attachments (message_id, filename, file_path, size_bytes, content_type,
+                                         is_inline, content_id, skipped, skip_reason, extracted_at)
+                VALUES (@messageId, @filename, @filePath, @sizeBytes, @contentType,
+                        @isInline, @contentId, @skipped, @skipReason, @extractedAt);
+                SELECT last_insert_rowid();";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO attachments (message_id, filename, file_path, size_bytes, content_type,
-                                     is_inline, content_id, skipped, skip_reason, extracted_at)
-            VALUES (@messageId, @filename, @filePath, @sizeBytes, @contentType,
-                    @isInline, @contentId, @skipped, @skipReason, @extractedAt);
-            SELECT last_insert_rowid();";
+            cmd.Parameters.AddWithValue("@messageId", attachment.MessageId);
+            cmd.Parameters.AddWithValue("@filename", attachment.Filename);
+            cmd.Parameters.AddWithValue("@filePath", (object?)attachment.FilePath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@sizeBytes", attachment.SizeBytes);
+            cmd.Parameters.AddWithValue("@contentType", (object?)attachment.ContentType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@isInline", attachment.IsInline ? 1 : 0);
+            cmd.Parameters.AddWithValue("@contentId", (object?)attachment.ContentId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@skipped", attachment.Skipped ? 1 : 0);
+            cmd.Parameters.AddWithValue("@skipReason", (object?)attachment.SkipReason ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@extractedAt", attachment.ExtractedAt.ToString("O"));
 
-        cmd.Parameters.AddWithValue("@messageId", attachment.MessageId);
-        cmd.Parameters.AddWithValue("@filename", attachment.Filename);
-        cmd.Parameters.AddWithValue("@filePath", attachment.FilePath);
-        cmd.Parameters.AddWithValue("@sizeBytes", attachment.SizeBytes);
-        cmd.Parameters.AddWithValue("@contentType", (object?)attachment.ContentType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@isInline", attachment.IsInline ? 1 : 0);
-        cmd.Parameters.AddWithValue("@contentId", (object?)attachment.ContentId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@skipped", attachment.Skipped ? 1 : 0);
-        cmd.Parameters.AddWithValue("@skipReason", (object?)attachment.SkipReason ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@extractedAt", attachment.ExtractedAt.ToString("O"));
-
-        var result = await cmd.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteAttachmentsForMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM attachments WHERE message_id = @messageId";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM attachments WHERE message_id = @messageId";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Attachment>> GetSkippedAttachmentsAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT id, message_id, filename, file_path, size_bytes, content_type,
-                   is_inline, content_id, skipped, skip_reason, extracted_at
-            FROM attachments
-            WHERE skipped = 1
-            ORDER BY extracted_at DESC";
-
-        var attachments = new List<Attachment>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            attachments.Add(ReadAttachment(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT id, message_id, filename, file_path, size_bytes, content_type,
+                       is_inline, content_id, skipped, skip_reason, extracted_at
+                FROM attachments
+                WHERE skipped = 1
+                ORDER BY extracted_at DESC";
 
-        return attachments;
+            var attachments = new List<Attachment>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                attachments.Add(ReadAttachment(reader));
+            }
+
+            return (IReadOnlyList<Attachment>)attachments;
+        }, cancellationToken);
     }
 
     private static Attachment ReadAttachment(SqliteDataReader reader)
@@ -1106,7 +1396,8 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
             Id = reader.GetInt64(0),
             MessageId = reader.GetString(1),
             Filename = reader.GetString(2),
-            FilePath = reader.GetString(3),
+            // Apply NFC normalization for consistent filesystem path matching
+            FilePath = reader.IsDBNull(3) ? null : PathNormalizationHelper.NormalizePath(reader.GetString(3)),
             SizeBytes = reader.GetInt64(4),
             ContentType = reader.IsDBNull(5) ? null : reader.GetString(5),
             IsInline = reader.GetInt32(6) != 0,
@@ -1124,68 +1415,71 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<ZipExtraction?> GetZipExtractionAsync(long attachmentId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT id, attachment_id, message_id, zip_filename, extraction_path, extracted,
-                   skip_reason, file_count, total_size_bytes, has_executables, has_unsafe_paths,
-                   is_encrypted, extracted_at
-            FROM zip_extractions
-            WHERE attachment_id = @attachmentId";
-        cmd.Parameters.AddWithValue("@attachmentId", attachmentId);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadZipExtraction(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT id, attachment_id, message_id, zip_filename, extraction_path, extracted,
+                       skip_reason, file_count, total_size_bytes, has_executables, has_unsafe_paths,
+                       is_encrypted, extracted_at
+                FROM zip_extractions
+                WHERE attachment_id = @attachmentId";
+            cmd.Parameters.AddWithValue("@attachmentId", attachmentId);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadZipExtraction(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<long> InsertZipExtractionAsync(ZipExtraction zipExtraction, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO zip_extractions (attachment_id, message_id, zip_filename, extraction_path, extracted,
+                                             skip_reason, file_count, total_size_bytes, has_executables,
+                                             has_unsafe_paths, is_encrypted, extracted_at)
+                VALUES (@attachmentId, @messageId, @zipFilename, @extractionPath, @extracted,
+                        @skipReason, @fileCount, @totalSizeBytes, @hasExecutables,
+                        @hasUnsafePaths, @isEncrypted, @extractedAt);
+                SELECT last_insert_rowid();";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO zip_extractions (attachment_id, message_id, zip_filename, extraction_path, extracted,
-                                         skip_reason, file_count, total_size_bytes, has_executables,
-                                         has_unsafe_paths, is_encrypted, extracted_at)
-            VALUES (@attachmentId, @messageId, @zipFilename, @extractionPath, @extracted,
-                    @skipReason, @fileCount, @totalSizeBytes, @hasExecutables,
-                    @hasUnsafePaths, @isEncrypted, @extractedAt);
-            SELECT last_insert_rowid();";
+            cmd.Parameters.AddWithValue("@attachmentId", zipExtraction.AttachmentId);
+            cmd.Parameters.AddWithValue("@messageId", zipExtraction.MessageId);
+            cmd.Parameters.AddWithValue("@zipFilename", zipExtraction.ZipFilename);
+            cmd.Parameters.AddWithValue("@extractionPath", zipExtraction.ExtractionPath);
+            cmd.Parameters.AddWithValue("@extracted", zipExtraction.Extracted ? 1 : 0);
+            cmd.Parameters.AddWithValue("@skipReason", (object?)zipExtraction.SkipReason ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@fileCount", zipExtraction.FileCount.HasValue ? zipExtraction.FileCount.Value : DBNull.Value);
+            cmd.Parameters.AddWithValue("@totalSizeBytes", zipExtraction.TotalSizeBytes.HasValue ? zipExtraction.TotalSizeBytes.Value : DBNull.Value);
+            cmd.Parameters.AddWithValue("@hasExecutables", zipExtraction.HasExecutables.HasValue ? (zipExtraction.HasExecutables.Value ? 1 : 0) : DBNull.Value);
+            cmd.Parameters.AddWithValue("@hasUnsafePaths", zipExtraction.HasUnsafePaths.HasValue ? (zipExtraction.HasUnsafePaths.Value ? 1 : 0) : DBNull.Value);
+            cmd.Parameters.AddWithValue("@isEncrypted", zipExtraction.IsEncrypted.HasValue ? (zipExtraction.IsEncrypted.Value ? 1 : 0) : DBNull.Value);
+            cmd.Parameters.AddWithValue("@extractedAt", zipExtraction.ExtractedAt.ToString("O"));
 
-        cmd.Parameters.AddWithValue("@attachmentId", zipExtraction.AttachmentId);
-        cmd.Parameters.AddWithValue("@messageId", zipExtraction.MessageId);
-        cmd.Parameters.AddWithValue("@zipFilename", zipExtraction.ZipFilename);
-        cmd.Parameters.AddWithValue("@extractionPath", zipExtraction.ExtractionPath);
-        cmd.Parameters.AddWithValue("@extracted", zipExtraction.Extracted ? 1 : 0);
-        cmd.Parameters.AddWithValue("@skipReason", (object?)zipExtraction.SkipReason ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@fileCount", zipExtraction.FileCount.HasValue ? zipExtraction.FileCount.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@totalSizeBytes", zipExtraction.TotalSizeBytes.HasValue ? zipExtraction.TotalSizeBytes.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@hasExecutables", zipExtraction.HasExecutables.HasValue ? (zipExtraction.HasExecutables.Value ? 1 : 0) : DBNull.Value);
-        cmd.Parameters.AddWithValue("@hasUnsafePaths", zipExtraction.HasUnsafePaths.HasValue ? (zipExtraction.HasUnsafePaths.Value ? 1 : 0) : DBNull.Value);
-        cmd.Parameters.AddWithValue("@isEncrypted", zipExtraction.IsEncrypted.HasValue ? (zipExtraction.IsEncrypted.Value ? 1 : 0) : DBNull.Value);
-        cmd.Parameters.AddWithValue("@extractedAt", zipExtraction.ExtractedAt.ToString("O"));
-
-        var result = await cmd.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteZipExtractionsForMessageAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM zip_extractions WHERE message_id = @messageId";
+            cmd.Parameters.AddWithValue("@messageId", messageId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM zip_extractions WHERE message_id = @messageId";
-        cmd.Parameters.AddWithValue("@messageId", messageId);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     private static ZipExtraction ReadZipExtraction(SqliteDataReader reader)
@@ -1196,7 +1490,8 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
             AttachmentId = reader.GetInt64(1),
             MessageId = reader.GetString(2),
             ZipFilename = reader.GetString(3),
-            ExtractionPath = reader.GetString(4),
+            // Apply NFC normalization for consistent filesystem path matching
+            ExtractionPath = PathNormalizationHelper.NormalizePath(reader.GetString(4)),
             Extracted = reader.GetInt32(5) != 0,
             SkipReason = reader.IsDBNull(6) ? null : reader.GetString(6),
             FileCount = reader.IsDBNull(7) ? null : reader.GetInt32(7),
@@ -1215,68 +1510,71 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<IReadOnlyList<ZipExtractedFile>> GetZipExtractedFilesAsync(long zipExtractionId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT id, zip_extraction_id, relative_path, extracted_path, size_bytes
-            FROM zip_extracted_files
-            WHERE zip_extraction_id = @zipExtractionId
-            ORDER BY relative_path";
-        cmd.Parameters.AddWithValue("@zipExtractionId", zipExtractionId);
-
-        var files = new List<ZipExtractedFile>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            files.Add(ReadZipExtractedFile(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT id, zip_extraction_id, relative_path, extracted_path, size_bytes
+                FROM zip_extracted_files
+                WHERE zip_extraction_id = @zipExtractionId
+                ORDER BY relative_path";
+            cmd.Parameters.AddWithValue("@zipExtractionId", zipExtractionId);
 
-        return files;
+            var files = new List<ZipExtractedFile>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                files.Add(ReadZipExtractedFile(reader));
+            }
+
+            return (IReadOnlyList<ZipExtractedFile>)files;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task InsertZipExtractedFileAsync(ZipExtractedFile file, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO zip_extracted_files (zip_extraction_id, relative_path, extracted_path, size_bytes)
+                VALUES (@zipExtractionId, @relativePath, @extractedPath, @sizeBytes)";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO zip_extracted_files (zip_extraction_id, relative_path, extracted_path, size_bytes)
-            VALUES (@zipExtractionId, @relativePath, @extractedPath, @sizeBytes)";
+            cmd.Parameters.AddWithValue("@zipExtractionId", file.ZipExtractionId);
+            cmd.Parameters.AddWithValue("@relativePath", file.RelativePath);
+            cmd.Parameters.AddWithValue("@extractedPath", file.ExtractedPath);
+            cmd.Parameters.AddWithValue("@sizeBytes", file.SizeBytes);
 
-        cmd.Parameters.AddWithValue("@zipExtractionId", file.ZipExtractionId);
-        cmd.Parameters.AddWithValue("@relativePath", file.RelativePath);
-        cmd.Parameters.AddWithValue("@extractedPath", file.ExtractedPath);
-        cmd.Parameters.AddWithValue("@sizeBytes", file.SizeBytes);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task InsertZipExtractedFilesAsync(IEnumerable<ZipExtractedFile> files, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO zip_extracted_files (zip_extraction_id, relative_path, extracted_path, size_bytes)
-            VALUES (@zipExtractionId, @relativePath, @extractedPath, @sizeBytes)";
-
-        var zipExtractionIdParam = cmd.Parameters.Add("@zipExtractionId", SqliteType.Integer);
-        var relativePathParam = cmd.Parameters.Add("@relativePath", SqliteType.Text);
-        var extractedPathParam = cmd.Parameters.Add("@extractedPath", SqliteType.Text);
-        var sizeBytesParam = cmd.Parameters.Add("@sizeBytes", SqliteType.Integer);
-
-        foreach (var file in files)
+        await ExecuteWithLockAsync(async connection =>
         {
-            zipExtractionIdParam.Value = file.ZipExtractionId;
-            relativePathParam.Value = file.RelativePath;
-            extractedPathParam.Value = file.ExtractedPath;
-            sizeBytesParam.Value = file.SizeBytes;
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO zip_extracted_files (zip_extraction_id, relative_path, extracted_path, size_bytes)
+                VALUES (@zipExtractionId, @relativePath, @extractedPath, @sizeBytes)";
 
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+            var zipExtractionIdParam = cmd.Parameters.Add("@zipExtractionId", SqliteType.Integer);
+            var relativePathParam = cmd.Parameters.Add("@relativePath", SqliteType.Text);
+            var extractedPathParam = cmd.Parameters.Add("@extractedPath", SqliteType.Text);
+            var sizeBytesParam = cmd.Parameters.Add("@sizeBytes", SqliteType.Integer);
+
+            foreach (var file in files)
+            {
+                zipExtractionIdParam.Value = file.ZipExtractionId;
+                relativePathParam.Value = file.RelativePath;
+                extractedPathParam.Value = file.ExtractedPath;
+                sizeBytesParam.Value = file.SizeBytes;
+
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }, cancellationToken);
     }
 
     private static ZipExtractedFile ReadZipExtractedFile(SqliteDataReader reader)
@@ -1285,8 +1583,9 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
         {
             Id = reader.GetInt64(0),
             ZipExtractionId = reader.GetInt64(1),
-            RelativePath = reader.GetString(2),
-            ExtractedPath = reader.GetString(3),
+            // Apply NFC normalization for consistent filesystem path matching
+            RelativePath = PathNormalizationHelper.NormalizePath(reader.GetString(2)),
+            ExtractedPath = PathNormalizationHelper.NormalizePath(reader.GetString(3)),
             SizeBytes = reader.GetInt64(4)
         };
     }
@@ -1298,86 +1597,90 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     /// <inheritdoc />
     public async Task<FolderSyncProgress?> GetFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
-                   sync_started_at, last_checkpoint_at, messages_processed
-            FROM folder_sync_progress
-            WHERE folder_id = @folderId";
-        cmd.Parameters.AddWithValue("@folderId", folderId);
-
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            return ReadFolderSyncProgress(reader);
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
+                       sync_started_at, last_checkpoint_at, messages_processed
+                FROM folder_sync_progress
+                WHERE folder_id = @folderId";
+            cmd.Parameters.AddWithValue("@folderId", folderId);
 
-        return null;
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadFolderSyncProgress(reader);
+            }
+
+            return null;
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task UpsertFolderSyncProgressAsync(FolderSyncProgress progress, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO folder_sync_progress (folder_id, pending_next_link, pending_page_number, pending_message_index,
+                                                  sync_started_at, last_checkpoint_at, messages_processed)
+                VALUES (@folderId, @pendingNextLink, @pendingPageNumber, @pendingMessageIndex,
+                        @syncStartedAt, @lastCheckpointAt, @messagesProcessed)
+                ON CONFLICT(folder_id) DO UPDATE SET
+                    pending_next_link = @pendingNextLink,
+                    pending_page_number = @pendingPageNumber,
+                    pending_message_index = @pendingMessageIndex,
+                    last_checkpoint_at = @lastCheckpointAt,
+                    messages_processed = @messagesProcessed";
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO folder_sync_progress (folder_id, pending_next_link, pending_page_number, pending_message_index,
-                                              sync_started_at, last_checkpoint_at, messages_processed)
-            VALUES (@folderId, @pendingNextLink, @pendingPageNumber, @pendingMessageIndex,
-                    @syncStartedAt, @lastCheckpointAt, @messagesProcessed)
-            ON CONFLICT(folder_id) DO UPDATE SET
-                pending_next_link = @pendingNextLink,
-                pending_page_number = @pendingPageNumber,
-                pending_message_index = @pendingMessageIndex,
-                last_checkpoint_at = @lastCheckpointAt,
-                messages_processed = @messagesProcessed";
+            cmd.Parameters.AddWithValue("@folderId", progress.FolderId);
+            cmd.Parameters.AddWithValue("@pendingNextLink", (object?)progress.PendingNextLink ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@pendingPageNumber", progress.PendingPageNumber);
+            cmd.Parameters.AddWithValue("@pendingMessageIndex", progress.PendingMessageIndex);
+            cmd.Parameters.AddWithValue("@syncStartedAt", progress.SyncStartedAt.HasValue ? progress.SyncStartedAt.Value.ToString("O") : DBNull.Value);
+            cmd.Parameters.AddWithValue("@lastCheckpointAt", progress.LastCheckpointAt.HasValue ? progress.LastCheckpointAt.Value.ToString("O") : DBNull.Value);
+            cmd.Parameters.AddWithValue("@messagesProcessed", progress.MessagesProcessed);
 
-        cmd.Parameters.AddWithValue("@folderId", progress.FolderId);
-        cmd.Parameters.AddWithValue("@pendingNextLink", (object?)progress.PendingNextLink ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@pendingPageNumber", progress.PendingPageNumber);
-        cmd.Parameters.AddWithValue("@pendingMessageIndex", progress.PendingMessageIndex);
-        cmd.Parameters.AddWithValue("@syncStartedAt", progress.SyncStartedAt.HasValue ? progress.SyncStartedAt.Value.ToString("O") : DBNull.Value);
-        cmd.Parameters.AddWithValue("@lastCheckpointAt", progress.LastCheckpointAt.HasValue ? progress.LastCheckpointAt.Value.ToString("O") : DBNull.Value);
-        cmd.Parameters.AddWithValue("@messagesProcessed", progress.MessagesProcessed);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task DeleteFolderSyncProgressAsync(string folderId, CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
+        await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM folder_sync_progress WHERE folder_id = @folderId";
+            cmd.Parameters.AddWithValue("@folderId", folderId);
 
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM folder_sync_progress WHERE folder_id = @folderId";
-        cmd.Parameters.AddWithValue("@folderId", folderId);
-
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<FolderSyncProgress>> GetAllFolderSyncProgressAsync(CancellationToken cancellationToken = default)
     {
-        var connection = await GetConnectionAsync(cancellationToken);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
-                   sync_started_at, last_checkpoint_at, messages_processed
-            FROM folder_sync_progress
-            ORDER BY sync_started_at";
-
-        var results = new List<FolderSyncProgress>();
-        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        return await ExecuteWithLockAsync(async connection =>
         {
-            results.Add(ReadFolderSyncProgress(reader));
-        }
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT folder_id, pending_next_link, pending_page_number, pending_message_index,
+                       sync_started_at, last_checkpoint_at, messages_processed
+                FROM folder_sync_progress
+                ORDER BY sync_started_at";
 
-        return results;
+            var results = new List<FolderSyncProgress>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                results.Add(ReadFolderSyncProgress(reader));
+            }
+
+            return (IReadOnlyList<FolderSyncProgress>)results;
+        }, cancellationToken);
     }
 
     private static FolderSyncProgress ReadFolderSyncProgress(SqliteDataReader reader)
@@ -1423,6 +1726,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
                         // Ignore disposal errors - connection may be in an invalid state
                     }
                     _connection = null;
+                    _lock.Dispose();
                 }
                 _disposed = true;
             }
@@ -1433,6 +1737,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
     {
         // Capture the connection reference under lock to avoid race condition
         SqliteConnection? connectionToDispose = null;
+        var shouldDisposeLock = false;
 
         lock (_disposeLock)
         {
@@ -1440,6 +1745,7 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
             {
                 connectionToDispose = _connection;
                 _connection = null;
+                shouldDisposeLock = true;
                 _disposed = true;
             }
         }
@@ -1455,6 +1761,11 @@ CREATE TABLE IF NOT EXISTS folder_sync_progress (
             {
                 // Ignore disposal errors - connection may be in an invalid state
             }
+        }
+
+        if (shouldDisposeLock)
+        {
+            _lock.Dispose();
         }
 
         GC.SuppressFinalize(this);

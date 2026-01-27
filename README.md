@@ -162,7 +162,7 @@ This will:
 
 ### 6. Understanding Attachment Handling
 
-**Executable files**: For security, executable files (`.exe`, `.dll`, `.sh`, `.bat`, etc.) are not extracted by default. Instead, a `.skipped` placeholder file is created explaining why the file was skipped. You can always access the original attachment by opening the EML file in an email client.
+**Executable files**: For security, executable files (`.exe`, `.dll`, `.sh`, `.bat`, etc.) are not extracted by default. You can always access the original attachment by opening the EML file in an email client.
 
 **ZIP file extraction**: ZIP attachments are automatically extracted when:
 

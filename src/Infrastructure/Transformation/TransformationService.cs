@@ -64,6 +64,10 @@ public class TransformationService : ITransformationService
             // Determine which transformation types to run
             var transformTypes = GetTransformationTypes(options);
 
+            _logger.Info("Transform options: EnableHtml={0}, EnableMarkdown={1}, EnableAttachments={2}, Only={3}, Force={4}",
+                options.EnableHtml, options.EnableMarkdown, options.EnableAttachments, options.Only ?? "(none)", options.Force);
+            _logger.Info("Transformation types to run: [{0}]", string.Join(", ", transformTypes));
+
             if (transformTypes.Count == 0)
             {
                 _logger.Warning("No transformations enabled");
@@ -71,96 +75,132 @@ public class TransformationService : ITransformationService
                 return TransformResult.Successful(0, 0, 0, stopwatch.Elapsed);
             }
 
-            // Process each transformation type
-            foreach (var transformType in transformTypes)
+            // Get messages to transform
+            progressCallback?.Invoke(new TransformProgress { Phase = "Finding messages" });
+
+            IReadOnlyList<Message> messages;
+
+            // Path filter mode: transform specific file or folder
+            if (!string.IsNullOrEmpty(options.FilterPath))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                progressCallback?.Invoke(new TransformProgress
+                if (options.FilterPathIsDirectory)
                 {
-                    Phase = "Finding messages to transform",
-                    TransformationType = transformType
-                });
-
-                // Get messages needing this transformation
-                IReadOnlyList<Message> messages;
-                if (options.Force)
-                {
-                    // Force mode: get all non-quarantined messages
-                    messages = await GetAllMessagesAsync(cancellationToken);
+                    // Directory mode: get all messages whose local_path starts with the given prefix
+                    _logger.Info("Directory filter mode: looking up messages for path prefix {0}", options.FilterPath);
+                    messages = await _database.GetMessagesByLocalPathPrefixAsync(options.FilterPath, cancellationToken);
+                    if (messages.Count == 0)
+                    {
+                        _logger.Warning("No messages found in database for path prefix: {0}", options.FilterPath);
+                        stopwatch.Stop();
+                        return TransformResult.Failed($"No messages found in database for path: {options.FilterPath}", stopwatch.Elapsed);
+                    }
+                    _logger.Info("Directory filter mode: found {0} messages in {1}", messages.Count, options.FilterPath);
                 }
                 else
                 {
-                    // Normal mode: only messages needing transformation
-                    messages = await _database.GetMessagesNeedingTransformationAsync(
-                        transformType,
-                        CurrentConfigVersion,
-                        cancellationToken);
+                    // Single file mode: transform a specific EML file
+                    _logger.Info("Single file mode: looking up message for {0}", options.FilterPath);
+                    var message = await _database.GetMessageByLocalPathAsync(options.FilterPath, cancellationToken);
+                    if (message == null)
+                    {
+                        _logger.Warning("Message not found in database for path: {0}", options.FilterPath);
+                        stopwatch.Stop();
+                        return TransformResult.Failed($"Message not found in database for path: {options.FilterPath}", stopwatch.Elapsed);
+                    }
+                    messages = new List<Message> { message };
+                    _logger.Info("Single file mode: transforming {0}", options.FilterPath);
                 }
-
-                _logger.Debug("{0}: {1} messages to process", transformType, messages.Count);
-
-                if (messages.Count == 0)
+            }
+            else if (options.Force)
+            {
+                messages = await GetAllMessagesAsync(cancellationToken);
+            }
+            else
+            {
+                // Get messages needing ANY of the enabled transformation types
+                var allMessages = new HashSet<Message>(new MessageGraphIdComparer());
+                foreach (var transformType in transformTypes)
                 {
-                    continue;
+                    var messagesForType = await _database.GetMessagesNeedingTransformationAsync(
+                        transformType, CurrentConfigVersion, cancellationToken);
+                    foreach (var msg in messagesForType)
+                        allMessages.Add(msg);
                 }
+                messages = allMessages.ToList();
+            }
 
-                // Process messages in parallel
-                using var semaphore = new SemaphoreSlim(options.MaxParallel);
-                var processedCount = 0;
+            _logger.Info("{0} messages found needing transformation", messages.Count);
 
-                var tasks = messages.Select(async message =>
+            // Apply max messages limit (not applicable in single file mode, but does apply to directory mode)
+            var isSingleFileMode = !string.IsNullOrEmpty(options.FilterPath) && !options.FilterPathIsDirectory;
+            if (!isSingleFileMode && options.MaxMessages > 0 && messages.Count > options.MaxMessages)
+            {
+                messages = messages.Take(options.MaxMessages).ToList();
+                _logger.Info("Limited to {0} messages (--max)", messages.Count);
+            }
+
+            if (messages.Count == 0)
+            {
+                _logger.Info("No messages to process");
+                stopwatch.Stop();
+                return TransformResult.Successful(0, 0, 0, stopwatch.Elapsed);
+            }
+
+            // Process messages in parallel, applying all transformation types per message
+            using var semaphore = new SemaphoreSlim(options.MaxParallel);
+            var processedCount = 0;
+
+            var tasks = messages.Select(async message =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    await semaphore.WaitAsync(cancellationToken);
-                    try
+                    var messageTransformed = 0;
+                    var messageErrors = 0;
+
+                    // Process all transformation types for this message (attachments first for dependency)
+                    foreach (var transformType in transformTypes)
                     {
                         var result = await TransformMessageAsync(message, transformType, options.HtmlOptions, options.AttachmentOptions, cancellationToken);
-                        Interlocked.Increment(ref processedCount);
-
-                        progressCallback?.Invoke(new TransformProgress
-                        {
-                            Phase = "Transforming",
-                            TransformationType = transformType,
-                            TotalMessages = messages.Count,
-                            ProcessedMessages = processedCount,
-                            TotalTransformed = transformed
-                        });
-
-                        return result;
+                        if (result == TransformMessageResult.Transformed)
+                            messageTransformed++;
+                        else if (result == TransformMessageResult.Error)
+                            messageErrors++;
                     }
-                    finally
+
+                    var count = Interlocked.Increment(ref processedCount);
+                    progressCallback?.Invoke(new TransformProgress
                     {
-                        semaphore.Release();
-                    }
-                });
+                        Phase = "Transforming",
+                        TotalMessages = messages.Count,
+                        ProcessedMessages = count
+                    });
 
-                var results = await Task.WhenAll(tasks);
-
-                foreach (var result in results)
-                {
-                    switch (result)
-                    {
-                        case TransformMessageResult.Transformed:
-                            transformed++;
-                            break;
-                        case TransformMessageResult.Skipped:
-                            skipped++;
-                            break;
-                        case TransformMessageResult.Error:
-                            errors++;
-                            break;
-                    }
+                    return (Transformed: messageTransformed, Errors: messageErrors);
                 }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results)
+            {
+                transformed += result.Transformed;
+                errors += result.Errors;
             }
 
             stopwatch.Stop();
+            _logger.Info("Transformation complete: {0} transformed, {1} errors", transformed, errors);
             return TransformResult.Successful(transformed, skipped, errors, stopwatch.Elapsed);
         }
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
-            _logger.Warning("Transformation cancelled after {0}", stopwatch.Elapsed);
-            return TransformResult.Failed("Transformation was cancelled", stopwatch.Elapsed);
+            _logger.Info("Transformation cancelled by user after {0}", stopwatch.Elapsed);
+            return TransformResult.Cancelled(transformed, skipped, stopwatch.Elapsed);
         }
         catch (Exception ex)
         {
@@ -220,10 +260,41 @@ public class TransformationService : ITransformationService
     {
         try
         {
+            // Log cross-reference between GraphId and local path for debugging
+            var emlLocalPath = message.LocalPath;
+            var emlFullPath = Path.Combine(_archiveRoot, message.LocalPath);
+            _logger.Debug("Transforming message: GraphId={0}, EML={1}, FullPath={2}",
+                message.GraphId, emlLocalPath, emlFullPath);
+
             // Check if EML file exists
             if (!_emlStorage.Exists(message.LocalPath))
             {
                 _logger.Warning("EML file not found: {0}", message.LocalPath);
+
+                // Enhanced diagnostic logging for Unicode path issues
+                if (PathNormalizationHelper.HasPotentialNormalizationIssues(message.LocalPath))
+                {
+                    _logger.Debug("Path has Unicode normalization issue. Diagnostic: {0}",
+                        PathNormalizationHelper.GetDiagnosticRepresentation(message.LocalPath));
+                }
+
+                // List files in directory to help troubleshoot
+                var directory = Path.GetDirectoryName(emlFullPath);
+                if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+                {
+                    try
+                    {
+                        var files = Directory.GetFiles(directory, "*.eml")
+                            .Select(Path.GetFileName)
+                            .Take(10);
+                        _logger.Debug("EML files in directory: [{0}]", string.Join(", ", files));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug("Could not list directory contents: {0}", ex.Message);
+                    }
+                }
+
                 return TransformMessageResult.Error;
             }
 
@@ -267,9 +338,15 @@ public class TransformationService : ITransformationService
             _logger.Debug("Transformed {0} ({1}): {2}", message.Subject ?? message.GraphId, transformType, outputPath);
             return TransformMessageResult.Transformed;
         }
+        catch (OperationCanceledException)
+        {
+            // Rethrow cancellation exceptions to allow graceful shutdown
+            throw;
+        }
         catch (Exception ex)
         {
-            _logger.Error(ex, "Error transforming message {0} ({1}): {2}", message.GraphId, transformType, ex.Message);
+            _logger.Error(ex, "Error transforming message {0} [GraphId={1}] ({2}): {3}\nStack trace: {4}",
+                message.LocalPath, message.GraphId, transformType, ex.Message, ex.StackTrace ?? "(no stack trace)");
             return TransformMessageResult.Error;
         }
     }
@@ -277,6 +354,7 @@ public class TransformationService : ITransformationService
     private async Task<string> TransformToHtmlAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _logger.Debug("Starting HTML transformation for message {0}", message.LocalPath);
 
         // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.html
         var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
@@ -290,7 +368,10 @@ public class TransformationService : ITransformationService
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
         // Generate HTML with attachment links, breadcrumb navigation, and optional Outlook link
+        _logger.Debug("Generating HTML content for message {0} (body length: {1})",
+            message.LocalPath, (mimeMessage.HtmlBody?.Length ?? mimeMessage.TextBody?.Length ?? 0));
         var html = GenerateHtml(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions, message.ImmutableId);
+        _logger.Debug("HTML generation completed for message {0}", message.LocalPath);
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
@@ -300,6 +381,7 @@ public class TransformationService : ITransformationService
     private async Task<string> TransformToMarkdownAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _logger.Debug("Starting Markdown transformation for message {0}", message.LocalPath);
 
         // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.md
         var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
@@ -313,7 +395,10 @@ public class TransformationService : ITransformationService
         var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
         // Generate Markdown with attachment links, breadcrumb navigation, and optional Outlook link
+        _logger.Debug("Generating Markdown content for message {0} (text length: {1}, html length: {2})",
+            message.LocalPath, mimeMessage.TextBody?.Length ?? 0, mimeMessage.HtmlBody?.Length ?? 0);
         var markdown = GenerateMarkdown(mimeMessage, outputPath, attachments, message.FolderPath, htmlOptions, message.ImmutableId);
+        _logger.Debug("Markdown generation completed for message {0}", message.LocalPath);
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
@@ -357,13 +442,26 @@ public class TransformationService : ITransformationService
         // Use BodyParts instead of Attachments to include inline images
         // MimeMessage.Attachments only returns parts with Content-Disposition: attachment
         // Inline images have Content-Disposition: inline and are part of BodyParts
-        foreach (var bodyPart in mimeMessage.BodyParts.OfType<MimePart>())
+        var bodyParts = mimeMessage.BodyParts.OfType<MimePart>().ToList();
+        _logger.Debug("Processing {0} body parts for message {1}", bodyParts.Count, message.LocalPath);
+        var partIndex = 0;
+        foreach (var bodyPart in bodyParts)
         {
+            partIndex++;
             cancellationToken.ThrowIfCancellationRequested();
 
             // Skip text parts (they're the message body, not attachments/images)
             if (bodyPart is TextPart)
+            {
+                _logger.Debug("Part {0}/{1}: Skipping TextPart", partIndex, bodyParts.Count);
                 continue;
+            }
+
+            _logger.Debug("Part {0}/{1}: Processing {2} ({3}, {4})",
+                partIndex, bodyParts.Count,
+                bodyPart.FileName ?? "(no filename)",
+                bodyPart.ContentType?.MimeType ?? "unknown",
+                bodyPart.ContentDisposition?.Disposition ?? "no-disposition");
 
             var disposition = bodyPart.ContentDisposition?.Disposition;
             var isInline = disposition == ContentDisposition.Inline;
@@ -406,9 +504,16 @@ public class TransformationService : ITransformationService
                 var fullImagePath = Path.Combine(_archiveRoot, imagePath);
 
                 // Handle filename collisions (unlikely but possible)
+                // Safety limit to prevent infinite loops in edge cases
+                const int maxCollisionAttempts = 10000;
                 var counter = 1;
                 while (File.Exists(fullImagePath))
                 {
+                    if (counter > maxCollisionAttempts)
+                    {
+                        throw new InvalidOperationException(
+                            $"Unable to find unique image path after {maxCollisionAttempts} attempts: {fullImagePath}");
+                    }
                     imageFilename = $"{emailBaseName}_{inlineImageCount}_{counter}{ext}";
                     imagePath = Path.Combine(imagesDir, imageFilename);
                     fullImagePath = Path.Combine(_archiveRoot, imagePath);
@@ -416,9 +521,16 @@ public class TransformationService : ITransformationService
                 }
 
                 // Extract the image
+                try
                 {
                     using var stream = File.Create(fullImagePath);
                     await bodyPart.Content.DecodeToAsync(stream, cancellationToken);
+                }
+                catch (Exception ex) when (ex is ArgumentOutOfRangeException or FormatException or IndexOutOfRangeException)
+                {
+                    _logger.Error(ex, "Failed to decode inline image for message {0} [GraphId={1}], part '{2}' ({3}): {4}",
+                        message.LocalPath, message.GraphId, bodyPart.FileName ?? "unknown", bodyPart.ContentType?.MimeType ?? "unknown", ex.Message);
+                    throw;
                 }
 
                 var fileSize = new FileInfo(fullImagePath).Length;
@@ -451,33 +563,14 @@ public class TransformationService : ITransformationService
                 var blockedExtension = skipExecutables ? SecurityHelper.GetBlockedExtension(filename) : null;
                 if (blockedExtension != null)
                 {
-                    // Create attachments directory if needed
-                    if (!attachmentDirCreated)
-                    {
-                        Directory.CreateDirectory(Path.Combine(_archiveRoot, attachmentDir));
-                        attachmentDirCreated = true;
-                    }
+                    _logger.Info("Skipped executable attachment: {0} (blocked extension: {1})", originalFilename, blockedExtension);
 
-                    // Create a .skipped placeholder file instead
-                    var skippedFilename = filename + ".skipped";
-                    var skippedPath = Path.Combine(attachmentDir, skippedFilename);
-                    var fullSkippedPath = Path.Combine(_archiveRoot, skippedPath);
-
-                    var placeholder = SecurityHelper.GenerateSkippedPlaceholder(
-                        originalFilename,
-                        message.LocalPath,
-                        $"Executable file type ({blockedExtension})");
-
-                    await File.WriteAllTextAsync(fullSkippedPath, placeholder, cancellationToken);
-
-                    _logger.Info("Skipped executable attachment: {0} - created placeholder {1}", originalFilename, skippedFilename);
-
-                    // Record skipped attachment in database
+                    // Record skipped attachment in database (no file created)
                     var skippedAttachment = new Attachment
                     {
                         MessageId = message.GraphId,
                         Filename = originalFilename,
-                        FilePath = skippedPath,
+                        FilePath = null,
                         SizeBytes = 0,
                         ContentType = bodyPart.ContentType?.MimeType ?? "application/octet-stream",
                         IsInline = false,
@@ -489,7 +582,6 @@ public class TransformationService : ITransformationService
 
                     await _database.InsertAttachmentAsync(skippedAttachment, cancellationToken);
                     attachmentCount++;
-                    hasContent = true;
                     continue;
                 }
 
@@ -504,9 +596,16 @@ public class TransformationService : ITransformationService
                 var fullPath = Path.Combine(_archiveRoot, outputPath);
 
                 // Handle filename collisions
+                // Safety limit to prevent infinite loops in edge cases
+                const int maxCollisionAttempts = 10000;
                 var counter = 1;
                 while (File.Exists(fullPath))
                 {
+                    if (counter > maxCollisionAttempts)
+                    {
+                        throw new InvalidOperationException(
+                            $"Unable to find unique attachment path after {maxCollisionAttempts} attempts: {fullPath}");
+                    }
                     var ext = Path.GetExtension(filename);
                     var baseName = Path.GetFileNameWithoutExtension(filename);
                     filename = $"{baseName}_{counter}{ext}";
@@ -516,9 +615,16 @@ public class TransformationService : ITransformationService
                 }
 
                 // Use explicit block scope to ensure stream is closed before reading file size
+                try
                 {
                     using var stream = File.Create(fullPath);
                     await bodyPart.Content.DecodeToAsync(stream, cancellationToken);
+                }
+                catch (Exception ex) when (ex is ArgumentOutOfRangeException or FormatException or IndexOutOfRangeException)
+                {
+                    _logger.Error(ex, "Failed to decode attachment for message {0} [GraphId={1}], part '{2}' ({3}): {4}",
+                        message.LocalPath, message.GraphId, bodyPart.FileName ?? "unknown", bodyPart.ContentType?.MimeType ?? "unknown", ex.Message);
+                    throw;
                 }
                 attachmentCount++;
                 hasContent = true;
@@ -545,6 +651,7 @@ public class TransformationService : ITransformationService
                 // Check if this is a ZIP file and extract it
                 if (ZipExtractor.IsZipFile(filename))
                 {
+                    _logger.Debug("Part {0}/{1}: Starting ZIP extraction for {2}", partIndex, bodyParts.Count, filename);
                     await ExtractZipAttachmentAsync(
                         message,
                         attachmentId,
@@ -552,10 +659,14 @@ public class TransformationService : ITransformationService
                         Path.Combine(_archiveRoot, attachmentDir),
                         Path.Combine(attachmentDir, filename + "_extracted"),
                         cancellationToken);
+                    _logger.Debug("Part {0}/{1}: ZIP extraction completed for {2}", partIndex, bodyParts.Count, filename);
                 }
             }
+
+            _logger.Debug("Part {0}/{1}: Completed processing", partIndex, bodyParts.Count);
         }
 
+        _logger.Debug("Finished processing all {0} body parts for message {1}", bodyParts.Count, message.LocalPath);
         return hasContent ? attachmentDir : "no_attachments";
     }
 
@@ -825,7 +936,7 @@ to: ""{EscapeYamlString(toAddress)}""
         var cidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var attachment in attachments)
         {
-            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId))
+            if (attachment.IsInline && !string.IsNullOrEmpty(attachment.ContentId) && !attachment.Skipped && attachment.FilePath != null)
             {
                 // Calculate relative path from output file to the image
                 var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
@@ -982,7 +1093,7 @@ to: ""{EscapeYamlString(toAddress)}""
             }
             else
             {
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
                 var sizeFormatted = FormatFileSize(attachment.SizeBytes);
                 sb.AppendLine(CultureInfo.InvariantCulture, $"                    <li><a href=\"{relativePath}\">{displayName}</a> ({sizeFormatted})</li>");
             }
@@ -1019,7 +1130,7 @@ to: ""{EscapeYamlString(toAddress)}""
             }
             else
             {
-                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath);
+                var relativePath = CalculateRelativePathToAttachment(outputPath, attachment.FilePath!);
                 var sizeFormatted = FormatFileSize(attachment.SizeBytes);
                 sb.AppendLine(CultureInfo.InvariantCulture, $"- [{attachment.Filename}]({relativePath}) ({sizeFormatted})");
             }
@@ -1049,7 +1160,7 @@ to: ""{EscapeYamlString(toAddress)}""
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
-                    _logger.Warning("Attachment extraction failed for message {0}", message.GraphId);
+                    _logger.Warning("Attachment extraction failed for message {0} [GraphId={1}]", message.LocalPath, message.GraphId);
                 }
             }
 
@@ -1059,7 +1170,7 @@ to: ""{EscapeYamlString(toAddress)}""
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
-                    _logger.Warning("HTML transformation failed for message {0}", message.GraphId);
+                    _logger.Warning("HTML transformation failed for message {0} [GraphId={1}]", message.LocalPath, message.GraphId);
                 }
             }
 
@@ -1069,18 +1180,32 @@ to: ""{EscapeYamlString(toAddress)}""
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
-                    _logger.Warning("Markdown transformation failed for message {0}", message.GraphId);
+                    _logger.Warning("Markdown transformation failed for message {0} [GraphId={1}]", message.LocalPath, message.GraphId);
                 }
             }
 
             return success;
         }
+        catch (OperationCanceledException)
+        {
+            // Rethrow cancellation exceptions to allow graceful shutdown
+            throw;
+        }
         catch (Exception ex)
         {
-            _logger.Error(ex, "Error during inline transformation of message {0}: {1}",
-                message.GraphId, ex.Message);
+            _logger.Error(ex, "Error during inline transformation of message {0} [GraphId={1}]: {2}",
+                message.LocalPath, message.GraphId, ex.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Comparer for Message objects based on GraphId for HashSet deduplication.
+    /// </summary>
+    private sealed class MessageGraphIdComparer : IEqualityComparer<Message>
+    {
+        public bool Equals(Message? x, Message? y) => x?.GraphId == y?.GraphId;
+        public int GetHashCode(Message obj) => obj.GraphId?.GetHashCode() ?? 0;
     }
 
     private enum TransformMessageResult

@@ -260,8 +260,11 @@ public class EmlStorageService : IEmlStorageService
     /// <inheritdoc />
     public string GetFullPath(string relativePath)
     {
+        // Apply NFC normalization for consistent Unicode handling with filesystem
+        var normalizedPath = PathNormalizationHelper.NormalizePath(relativePath);
+
         // Ensure path is safe (no traversal attacks)
-        var fullPath = Path.GetFullPath(Path.Combine(_archiveRoot, relativePath));
+        var fullPath = Path.GetFullPath(Path.Combine(_archiveRoot, normalizedPath));
 
         if (!fullPath.StartsWith(_archiveRoot, StringComparison.OrdinalIgnoreCase))
         {

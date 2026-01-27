@@ -106,24 +106,4 @@ public class SecurityHelperTests
     }
 
     #endregion
-
-    #region Placeholder Generation Tests
-
-    [Fact]
-    public void GenerateSkippedPlaceholder_ContainsExpectedContent()
-    {
-        var placeholder = SecurityHelper.GenerateSkippedPlaceholder(
-            "virus.exe",
-            "eml/Inbox/2024/01/message.eml",
-            "Executable file type (.exe)");
-
-        placeholder.Should().Contain("SKIPPED: Executable file not extracted");
-        placeholder.Should().Contain("Filename: virus.exe");
-        placeholder.Should().Contain("Message: eml/Inbox/2024/01/message.eml");
-        placeholder.Should().Contain("Reason: Executable file type (.exe)");
-        placeholder.Should().Contain("Date:");
-        placeholder.Should().Contain("To extract this file manually");
-    }
-
-    #endregion
 }
