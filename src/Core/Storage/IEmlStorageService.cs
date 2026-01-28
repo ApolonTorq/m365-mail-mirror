@@ -2,15 +2,16 @@ namespace M365MailMirror.Core.Storage;
 
 /// <summary>
 /// Service for storing and managing EML files in the local archive.
-/// EML files are stored with folder/date hierarchy: eml/{folder}/{YYYY}/{MM}/{filename}.eml
+/// EML files are stored with date hierarchy: eml/{YYYY}/{MM}/{filename}.eml
 /// </summary>
 public interface IEmlStorageService
 {
     /// <summary>
-    /// Stores EML content to the archive using folder/date hierarchy.
+    /// Stores EML content to the archive using date hierarchy.
+    /// Filename includes folder prefix and datetime: {folder}_{datetime}_{subject}.eml
     /// </summary>
     /// <param name="emlContent">The raw MIME content stream.</param>
-    /// <param name="folderPath">The mail folder path (e.g., "Inbox/Important").</param>
+    /// <param name="folderPath">The M365 folder path for filename prefix (e.g., "Inbox/Processed").</param>
     /// <param name="subject">The message subject for filename generation.</param>
     /// <param name="receivedTime">When the message was received (for date hierarchy and filename).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -20,18 +21,6 @@ public interface IEmlStorageService
         string folderPath,
         string? subject,
         DateTimeOffset receivedTime,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Moves an EML file from one location to another (e.g., for folder moves or quarantine).
-    /// </summary>
-    /// <param name="sourcePath">The current relative path of the EML file.</param>
-    /// <param name="destinationFolderPath">The destination folder path.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The new relative path of the EML file.</returns>
-    Task<string> MoveEmlAsync(
-        string sourcePath,
-        string destinationFolderPath,
         CancellationToken cancellationToken = default);
 
     /// <summary>

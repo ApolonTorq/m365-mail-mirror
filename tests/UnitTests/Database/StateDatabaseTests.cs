@@ -700,6 +700,365 @@ public class StateDatabaseTests : IAsyncLifetime
 
     #endregion
 
+    #region File Size Query Tests
+
+    [Fact]
+    public async Task GetTotalEmlSize_ReturnsSumOfMessageSizes()
+    {
+        // Create messages with different sizes
+        var msg1 = CreateTestMessage("msg-size-1");
+        msg1.Size = 1000;
+        await _database.InsertMessageAsync(msg1);
+
+        var msg2 = CreateTestMessage("msg-size-2");
+        msg2.Size = 2500;
+        await _database.InsertMessageAsync(msg2);
+
+        var msg3 = CreateTestMessage("msg-size-3");
+        msg3.Size = 500;
+        await _database.InsertMessageAsync(msg3);
+
+        var totalSize = await _database.GetTotalEmlSizeAsync();
+        totalSize.Should().Be(4000); // 1000 + 2500 + 500
+    }
+
+    [Fact]
+    public async Task GetTotalEmlSize_ExcludesQuarantinedMessages()
+    {
+        var normal = CreateTestMessage("msg-normal");
+        normal.Size = 1000;
+        await _database.InsertMessageAsync(normal);
+
+        var quarantined = CreateTestMessage("msg-quarantined");
+        quarantined.Size = 9999;
+        quarantined.QuarantinedAt = DateTimeOffset.UtcNow;
+        quarantined.QuarantineReason = "test";
+        await _database.InsertMessageAsync(quarantined);
+
+        var totalSize = await _database.GetTotalEmlSizeAsync();
+        totalSize.Should().Be(1000); // Only non-quarantined message
+    }
+
+    [Fact]
+    public async Task GetTotalEmlSize_ReturnsZero_WhenNoMessages()
+    {
+        var totalSize = await _database.GetTotalEmlSizeAsync();
+        totalSize.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetTotalTransformationSize_ReturnsSumOfOutputSizes()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-trans-1"));
+        await _database.InsertMessageAsync(CreateTestMessage("msg-trans-2"));
+
+        // Create transformations with sizes
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-trans-1",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test1.html",
+            OutputSizeBytes = 5000
+        });
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-trans-1",
+            TransformationType = "markdown",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test1.md",
+            OutputSizeBytes = 3000
+        });
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-trans-2",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test2.html",
+            OutputSizeBytes = 2000
+        });
+
+        var totalSize = await _database.GetTotalTransformationSizeAsync();
+        totalSize.Should().Be(10000); // 5000 + 3000 + 2000
+    }
+
+    [Fact]
+    public async Task GetTotalTransformationSize_IgnoresNullSizes()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-null-size"));
+
+        // Transformation with null size (pre-v4 schema behavior)
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-null-size",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v3",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = null
+        });
+
+        // Transformation with size
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-null-size",
+            TransformationType = "markdown",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.md",
+            OutputSizeBytes = 1500
+        });
+
+        var totalSize = await _database.GetTotalTransformationSizeAsync();
+        totalSize.Should().Be(1500); // Only the one with size
+    }
+
+    [Fact]
+    public async Task GetTotalTransformationSize_ReturnsZero_WhenNoTransformations()
+    {
+        var totalSize = await _database.GetTotalTransformationSizeAsync();
+        totalSize.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Transformation_PersistsOutputSizeBytes()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-persist-size"));
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-persist-size",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = 12345
+        });
+
+        var retrieved = await _database.GetTransformationAsync("msg-persist-size", "html");
+        retrieved.Should().NotBeNull();
+        retrieved!.OutputSizeBytes.Should().Be(12345);
+    }
+
+    [Fact]
+    public async Task Transformation_UpdatesOutputSizeBytes()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-update-size"));
+
+        // Initial insert
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-update-size",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = 1000
+        });
+
+        // Update with new size
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-update-size",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = 2000
+        });
+
+        var retrieved = await _database.GetTransformationAsync("msg-update-size", "html");
+        retrieved.Should().NotBeNull();
+        retrieved!.OutputSizeBytes.Should().Be(2000);
+    }
+
+    [Fact]
+    public async Task GetTransformationSizeByType_ReturnsSizeForSpecificType()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-type-size"));
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-type-size",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = 5000
+        });
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-type-size",
+            TransformationType = "markdown",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.md",
+            OutputSizeBytes = 3000
+        });
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-type-size",
+            TransformationType = "attachments",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/attachments",
+            OutputSizeBytes = 8000
+        });
+
+        var htmlSize = await _database.GetTransformationSizeByTypeAsync("html");
+        var mdSize = await _database.GetTransformationSizeByTypeAsync("markdown");
+        var attachSize = await _database.GetTransformationSizeByTypeAsync("attachments");
+
+        htmlSize.Should().Be(5000);
+        mdSize.Should().Be(3000);
+        attachSize.Should().Be(8000);
+    }
+
+    [Fact]
+    public async Task GetTransformationSizeByType_ReturnsZero_WhenNoTransformationsOfType()
+    {
+        var size = await _database.GetTransformationSizeByTypeAsync("html");
+        size.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetTransformationSizeByType_IgnoresNullSizes()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-null-type"));
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-null-type",
+            TransformationType = "html",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v3",
+            OutputPath = "transformed/2024/01/test.html",
+            OutputSizeBytes = null
+        });
+
+        await _database.UpsertTransformationAsync(new Transformation
+        {
+            MessageId = "msg-null-type",
+            TransformationType = "markdown",
+            AppliedAt = DateTimeOffset.UtcNow,
+            ConfigVersion = "v4",
+            OutputPath = "transformed/2024/01/test.md",
+            OutputSizeBytes = 2500
+        });
+
+        var htmlSize = await _database.GetTransformationSizeByTypeAsync("html");
+        var mdSize = await _database.GetTransformationSizeByTypeAsync("markdown");
+
+        htmlSize.Should().Be(0); // Null size should be ignored
+        mdSize.Should().Be(2500);
+    }
+
+    [Fact]
+    public async Task GetTotalAttachmentSizeByInlineStatus_SeparatesInlineFromAttachments()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-inline-test"));
+
+        // Insert inline image
+        await _database.InsertAttachmentAsync(new Attachment
+        {
+            MessageId = "msg-inline-test",
+            Filename = "image.png",
+            FilePath = "transformed/Inbox/2024/01/images/image.png",
+            SizeBytes = 1000,
+            ContentType = "image/png",
+            IsInline = true,
+            Skipped = false,
+            ExtractedAt = DateTimeOffset.UtcNow
+        });
+
+        // Insert another inline image
+        await _database.InsertAttachmentAsync(new Attachment
+        {
+            MessageId = "msg-inline-test",
+            Filename = "logo.jpg",
+            FilePath = "transformed/Inbox/2024/01/images/logo.jpg",
+            SizeBytes = 500,
+            ContentType = "image/jpeg",
+            IsInline = true,
+            Skipped = false,
+            ExtractedAt = DateTimeOffset.UtcNow
+        });
+
+        // Insert regular attachment
+        await _database.InsertAttachmentAsync(new Attachment
+        {
+            MessageId = "msg-inline-test",
+            Filename = "document.pdf",
+            FilePath = "transformed/Inbox/2024/01/attachments/document.pdf",
+            SizeBytes = 5000,
+            ContentType = "application/pdf",
+            IsInline = false,
+            Skipped = false,
+            ExtractedAt = DateTimeOffset.UtcNow
+        });
+
+        var inlineSize = await _database.GetTotalAttachmentSizeByInlineStatusAsync(true);
+        var attachmentSize = await _database.GetTotalAttachmentSizeByInlineStatusAsync(false);
+
+        inlineSize.Should().Be(1500); // 1000 + 500
+        attachmentSize.Should().Be(5000);
+    }
+
+    [Fact]
+    public async Task GetTotalAttachmentSizeByInlineStatus_ExcludesSkippedAttachments()
+    {
+        await _database.InsertMessageAsync(CreateTestMessage("msg-skipped-attach"));
+
+        // Insert skipped attachment
+        await _database.InsertAttachmentAsync(new Attachment
+        {
+            MessageId = "msg-skipped-attach",
+            Filename = "virus.exe",
+            FilePath = null,
+            SizeBytes = 9999,
+            ContentType = "application/octet-stream",
+            IsInline = false,
+            Skipped = true,
+            SkipReason = "executable",
+            ExtractedAt = DateTimeOffset.UtcNow
+        });
+
+        // Insert valid attachment
+        await _database.InsertAttachmentAsync(new Attachment
+        {
+            MessageId = "msg-skipped-attach",
+            Filename = "safe.pdf",
+            FilePath = "transformed/Inbox/2024/01/attachments/safe.pdf",
+            SizeBytes = 2000,
+            ContentType = "application/pdf",
+            IsInline = false,
+            Skipped = false,
+            ExtractedAt = DateTimeOffset.UtcNow
+        });
+
+        var attachmentSize = await _database.GetTotalAttachmentSizeByInlineStatusAsync(false);
+        attachmentSize.Should().Be(2000); // Only non-skipped
+    }
+
+    [Fact]
+    public async Task GetTotalAttachmentSizeByInlineStatus_ReturnsZero_WhenNoAttachments()
+    {
+        var inlineSize = await _database.GetTotalAttachmentSizeByInlineStatusAsync(true);
+        var attachmentSize = await _database.GetTotalAttachmentSizeByInlineStatusAsync(false);
+
+        inlineSize.Should().Be(0);
+        attachmentSize.Should().Be(0);
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private static Message CreateTestMessage(string graphId, string folderPath = "Inbox")

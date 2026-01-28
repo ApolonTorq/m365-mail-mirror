@@ -111,6 +111,31 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
     /// </summary>
     Task<long> GetMessageCountByFolderAsync(string folderPath, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Gets the total size of all EML files in bytes (excluding quarantined messages).
+    /// </summary>
+    Task<long> GetTotalEmlSizeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the total size of all transformation outputs in bytes.
+    /// Only includes records with non-null output_size_bytes (Schema V4+).
+    /// </summary>
+    Task<long> GetTotalTransformationSizeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the total size of transformation outputs for a specific type in bytes.
+    /// Only includes records with non-null output_size_bytes (Schema V4+).
+    /// </summary>
+    /// <param name="transformationType">The transformation type: "html", "markdown", or "attachments".</param>
+    Task<long> GetTransformationSizeByTypeAsync(string transformationType, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the total size of attachments by inline status in bytes.
+    /// Used to separate inline images from regular attachments.
+    /// </summary>
+    /// <param name="isInline">True for inline images, false for regular attachments.</param>
+    Task<long> GetTotalAttachmentSizeByInlineStatusAsync(bool isInline, CancellationToken cancellationToken = default);
+
     // Index Generation Queries
 
     /// <summary>
@@ -130,11 +155,28 @@ public interface IStateDatabase : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets all distinct (year, month) combinations from all messages.
+    /// Returns non-quarantined messages.
+    /// </summary>
+    /// <returns>List of (year, month) tuples sorted descending.</returns>
+    Task<IReadOnlyList<(int Year, int Month)>> GetDistinctYearMonthsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets messages for a specific folder, year, and month for index generation.
     /// Returns non-quarantined messages sorted by received time descending.
     /// </summary>
     Task<IReadOnlyList<Message>> GetMessagesForIndexAsync(
         string folderPath,
+        int year,
+        int month,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets messages for a specific year and month for index generation (no folder filter).
+    /// Returns non-quarantined messages sorted by received time descending.
+    /// </summary>
+    Task<IReadOnlyList<Message>> GetMessagesForIndexAsync(
         int year,
         int month,
         CancellationToken cancellationToken = default);

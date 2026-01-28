@@ -33,4 +33,11 @@ public class Transformation
     /// The path to the generated output file or folder.
     /// </summary>
     public required string OutputPath { get; set; }
+
+    /// <summary>
+    /// Size of the output file in bytes.
+    /// May be null for records created before schema V4 or for attachment transformations
+    /// (where individual file sizes are tracked in the attachments table).
+    /// </summary>
+    public long? OutputSizeBytes { get; set; }
 }

@@ -15,6 +15,10 @@ Feature completion is tracked with checkboxes:
 
 ### Added
 
+- [x] **Flat date-based storage** (ADR-012): Messages stored in `eml/{YYYY}/{MM}/{folder-prefix}_{datetime}_{subject}.eml` structure, eliminating folder hierarchy replication and move tracking complexity. Folder path preserved as database metadata for filtering and display.
+- [x] **`--no-transform` option for sync**: Skip all transformations during sync even when HTML/Markdown/attachments are configured, useful for fast bulk downloads.
+- [x] **Tracking pixel detection**: Identifies and filters 1x1 tracking pixels from HTML email content during Markdown conversion.
+- [x] **Enhanced Markdown cleaning**: MarkdownCleaningHelper with nested list handling, image-only paragraph processing, HR tag conversion, bold text normalization, and semantic structure preservation.
 - [x] **Glob pattern support for folder exclusions**: The `excludeFolders` config and `--exclude` CLI option now support glob patterns: `*` for single-segment wildcards (e.g., `Inbox/Azure*`), `/*` for immediate children only (e.g., `Robots/*`), `/**` for all descendants (e.g., `Archive/**`), and `**/` prefix for matching at any depth (e.g., `**/Old*`). Matching is case-insensitive.
 - [x] **Index files and breadcrumb navigation**: Generates `index.html` and `index.md` files at each folder level (root, mail folders, years, months) for archive navigation. All pages (index files and individual emails) include clickable breadcrumb navigation showing the path hierarchy (Archive > Folder > Year > Month > Subject). Index generation runs automatically after sync and transform commands complete.
 - [x] **Streaming sync with checkpointing** (ADR-008): Per-message checkpointing via `--checkpoint-interval`, `FolderSyncProgress` entity, database schema v2 with `folder_sync_progress` table
@@ -30,6 +34,10 @@ Feature completion is tracked with checkboxes:
 
 ### Changed
 
+- [x] **Simplified storage model**: Removed folder hierarchy from storage paths; files stored by date only. Eliminates move tracking logic and file relocation during sync.
+- [x] **Enhanced filename format**: Filenames now include folder prefix, full datetime, and sanitized subject (e.g., `inbox_2024-01-15-10-30-45_meeting-notes.eml`) for browsable flat storage.
+- [x] **Enhanced sync progress reporting**: In-place terminal updates (when not redirected) with overall completion percentage, folder progress tracking (`[X/Y folders, Z%]`), cumulative file sizes by type (EML, HTML, MD, ATT, IMG), and messages-per-hour download rate. Mailbox totals shown at sync start.
+- [x] **Improved Markdown conversion**: Enhanced semantic structure handling, cid reference preservation for inline images, and cleaner output formatting.
 - [x] Renamed `--batch-size` to `--checkpoint-interval` (default 10)
 - [x] Database uses private cache mode and disabled pooling for better concurrency
 - [x] Folder upsert handles mutable→immutable Graph ID migration (preserves delta tokens)

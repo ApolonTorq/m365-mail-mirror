@@ -438,7 +438,7 @@ public class SyncEngineTests
         _mockEmlStorage.Setup(x => x.StoreEmlAsync(
             It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string?>(),
             It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync("eml/Inbox/2024/01/test.eml");
+            .ReturnsAsync("eml/2024/01/inbox_2024-01-15-10-30-00_test.eml");
 
         _mockEmlStorage.Setup(x => x.GetFileSize(It.IsAny<string>()))
             .Returns(1024L);
@@ -648,178 +648,6 @@ public class SyncEngineTests
                 f.LastSyncTime.Value >= beforeSync),
                 It.IsAny<CancellationToken>()),
             Times.Once);
-    }
-
-    [Fact]
-    public async Task SyncAsync_MovedMessage_UpdatesDatabaseAndMovesFile()
-    {
-        // Arrange
-        SetupBasicMocks();
-
-        var folders = new List<AppMailFolder>
-        {
-            CreateTestFolder("folder-1", "Inbox", 0)
-        };
-
-        _mockGraphClient.Setup(x => x.GetFoldersAsync(null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(folders);
-
-        // Setup stored folder
-        _mockDatabase.Setup(x => x.GetFolderAsync("folder-1", It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Folder?)null);
-
-        // Return a moved message in delta results
-        var movedMessage = new MessageInfo
-        {
-            Id = "msg-1",
-            ImmutableId = "msg-1",
-            Subject = "Moved message",
-            From = "sender@example.com",
-            ReceivedDateTime = DateTimeOffset.UtcNow.AddHours(-1),
-            HasAttachments = false,
-            IsDeleted = false,
-            IsMoved = true,
-            NewParentFolderId = "folder-2",
-            ParentFolderId = "folder-2"
-        };
-
-        _mockGraphClient.Setup(x => x.GetMessagesDeltaAsync("folder-1", null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new DeltaQueryResult<MessageInfo>
-            {
-                Items = new List<MessageInfo> { movedMessage },
-                HasMorePages = false,
-                DeltaToken = "delta-token"
-            });
-
-        // Existing message in database
-        var existingMessage = new Message
-        {
-            GraphId = "msg-1",
-            ImmutableId = "msg-1",
-            LocalPath = "eml/Inbox/2024/01/message.eml",
-            FolderPath = "Inbox",
-            Subject = "Moved message",
-            ReceivedTime = DateTimeOffset.UtcNow.AddHours(-1),
-            Size = 1024,
-            HasAttachments = false,
-            CreatedAt = DateTimeOffset.UtcNow.AddDays(-1),
-            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1)
-        };
-
-        _mockDatabase.Setup(x => x.GetMessageByImmutableIdAsync("msg-1", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(existingMessage);
-
-        // New folder exists in database
-        var newFolder = new Folder
-        {
-            GraphId = "folder-2",
-            LocalPath = "Archive",
-            DisplayName = "Archive",
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
-
-        _mockDatabase.Setup(x => x.GetFolderAsync("folder-2", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(newFolder);
-
-        // Setup move operation
-        _mockEmlStorage.Setup(x => x.MoveEmlAsync(
-            "eml/Inbox/2024/01/message.eml", "Archive", It.IsAny<CancellationToken>()))
-            .ReturnsAsync("eml/Archive/2024/01/message.eml");
-
-        var options = new SyncOptions();
-
-        // Act
-        var result = await _syncEngine.SyncAsync(options);
-
-        // Assert
-        result.Success.Should().BeTrue();
-
-        // Verify file was moved
-        _mockEmlStorage.Verify(
-            x => x.MoveEmlAsync("eml/Inbox/2024/01/message.eml", "Archive", It.IsAny<CancellationToken>()),
-            Times.Once);
-
-        // Verify database was updated
-        _mockDatabase.Verify(
-            x => x.UpdateMessageAsync(It.Is<Message>(m =>
-                m.ImmutableId == "msg-1" &&
-                m.LocalPath == "eml/Archive/2024/01/message.eml" &&
-                m.FolderPath == "Archive"),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Fact]
-    public async Task SyncAsync_MovedMessage_DryRun_DoesNotMoveFile()
-    {
-        // Arrange
-        SetupBasicMocks();
-
-        var folders = new List<AppMailFolder>
-        {
-            CreateTestFolder("folder-1", "Inbox", 0)
-        };
-
-        _mockGraphClient.Setup(x => x.GetFoldersAsync(null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(folders);
-
-        _mockDatabase.Setup(x => x.GetFolderAsync("folder-1", It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Folder?)null);
-
-        var movedMessage = new MessageInfo
-        {
-            Id = "msg-1",
-            ImmutableId = "msg-1",
-            Subject = "Moved message",
-            From = "sender@example.com",
-            ReceivedDateTime = DateTimeOffset.UtcNow.AddHours(-1),
-            HasAttachments = false,
-            IsDeleted = false,
-            IsMoved = true,
-            NewParentFolderId = "folder-2"
-        };
-
-        _mockGraphClient.Setup(x => x.GetMessagesDeltaAsync("folder-1", null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new DeltaQueryResult<MessageInfo>
-            {
-                Items = new List<MessageInfo> { movedMessage },
-                HasMorePages = false
-            });
-
-        var existingMessage = CreateTestMessage("msg-1");
-        _mockDatabase.Setup(x => x.GetMessageByImmutableIdAsync("msg-1", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(existingMessage);
-
-        var newFolder = new Folder
-        {
-            GraphId = "folder-2",
-            LocalPath = "Archive",
-            DisplayName = "Archive",
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
-
-        _mockDatabase.Setup(x => x.GetFolderAsync("folder-2", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(newFolder);
-
-        var options = new SyncOptions { DryRun = true };
-
-        // Act
-        var result = await _syncEngine.SyncAsync(options);
-
-        // Assert
-        result.Success.Should().BeTrue();
-
-        // Verify file was NOT moved in dry run
-        _mockEmlStorage.Verify(
-            x => x.MoveEmlAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-
-        // Verify database was NOT updated in dry run
-        _mockDatabase.Verify(
-            x => x.UpdateMessageAsync(It.IsAny<Message>(), It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     #endregion
@@ -1158,6 +986,58 @@ public class SyncEngineTests
         progressReports.Should().Contain(p => p.Phase == "Downloading messages");
     }
 
+    [Fact]
+    public async Task SyncAsync_WithProgressCallback_ReportsSyncStartTime()
+    {
+        // Arrange
+        SetupBasicMocks();
+        var beforeSync = DateTimeOffset.UtcNow;
+
+        var folders = new List<AppMailFolder>
+        {
+            CreateTestFolder("folder-1", "Inbox", 2)
+        };
+
+        _mockGraphClient.Setup(x => x.GetFoldersAsync(null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(folders);
+
+        _mockGraphClient.Setup(x => x.GetMessagesDeltaAsync("folder-1", null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DeltaQueryResult<MessageInfo>
+            {
+                Items = new List<MessageInfo>
+                {
+                    CreateTestMessageInfo("msg-1", "Test 1"),
+                    CreateTestMessageInfo("msg-2", "Test 2")
+                },
+                HasMorePages = false
+            });
+
+        _mockDatabase.Setup(x => x.GetMessageByImmutableIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Message?)null);
+
+        SetupMimeDownloadMock();
+
+        var progressReports = new List<SyncProgress>();
+
+        var options = new SyncOptions();
+
+        // Act
+        var result = await _syncEngine.SyncAsync(options, progress => progressReports.Add(progress));
+
+        // Assert
+        // All progress reports should have a SyncStartTime set
+        progressReports.Should().NotBeEmpty();
+        progressReports.Should().OnlyContain(p => p.SyncStartTime.HasValue);
+
+        // SyncStartTime should be consistent across all progress reports
+        var firstStartTime = progressReports.First().SyncStartTime!.Value;
+        progressReports.Should().OnlyContain(p => p.SyncStartTime == firstStartTime);
+
+        // SyncStartTime should be close to when sync started (within a few seconds)
+        firstStartTime.Should().BeOnOrAfter(beforeSync);
+        firstStartTime.Should().BeOnOrBefore(DateTimeOffset.UtcNow);
+    }
+
     #endregion
 
     #region Helper Methods
@@ -1169,6 +1049,14 @@ public class SyncEngineTests
 
         _mockDatabase.Setup(x => x.GetSyncStateAsync("user@example.com", It.IsAny<CancellationToken>()))
             .ReturnsAsync((SyncState?)null);
+
+        // Setup size query mocks (return 0 by default for progress tracking)
+        _mockDatabase.Setup(x => x.GetTotalEmlSizeAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0L);
+        _mockDatabase.Setup(x => x.GetTransformationSizeByTypeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0L);
+        _mockDatabase.Setup(x => x.GetTotalAttachmentSizeByInlineStatusAsync(It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0L);
     }
 
     private void SetupMimeDownloadMock()
@@ -1180,7 +1068,7 @@ public class SyncEngineTests
         _mockEmlStorage.Setup(x => x.StoreEmlAsync(
             It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string?>(),
             It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync("eml/Inbox/2024/01/test.eml");
+            .ReturnsAsync("eml/2024/01/inbox_2024-01-15-10-30-00_test.eml");
 
         _mockEmlStorage.Setup(x => x.GetFileSize(It.IsAny<string>()))
             .Returns(1024L);

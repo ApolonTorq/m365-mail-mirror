@@ -22,7 +22,7 @@ public class StateDatabase : IStateDatabase
     /// <summary>
     /// The current schema version. Increment when making schema changes.
     /// </summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     /// <summary>
     /// The default database filename.
@@ -194,6 +194,11 @@ public class StateDatabase : IStateDatabase
             if (fromVersion < 3)
             {
                 await ApplySchemaV3Async(connection, cancellationToken);
+            }
+
+            if (fromVersion < 4)
+            {
+                await ApplySchemaV4Async(connection, cancellationToken);
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -411,6 +416,23 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
         // Record schema version
         using var versionCmd = connection.CreateCommand();
         versionCmd.CommandText = "INSERT INTO schema_version (version) VALUES (3)";
+        await versionCmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private const string SchemaV4 = @"
+-- Add output_size_bytes column to transformations table for file size tracking
+ALTER TABLE transformations ADD COLUMN output_size_bytes INTEGER;
+";
+
+    private static async Task ApplySchemaV4Async(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SchemaV4;
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+        // Record schema version
+        using var versionCmd = connection.CreateCommand();
+        versionCmd.CommandText = "INSERT INTO schema_version (version) VALUES (4)";
         await versionCmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -787,6 +809,66 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
     }
 
     /// <inheritdoc />
+    public async Task<long> GetTotalEmlSizeAsync(CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(size), 0) FROM messages WHERE quarantined_at IS NULL";
+
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GetTotalTransformationSizeAsync(CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(output_size_bytes), 0) FROM transformations WHERE output_size_bytes IS NOT NULL";
+
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GetTransformationSizeByTypeAsync(string transformationType, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COALESCE(SUM(output_size_bytes), 0)
+                FROM transformations
+                WHERE transformation_type = @type AND output_size_bytes IS NOT NULL";
+            cmd.Parameters.AddWithValue("@type", transformationType);
+
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GetTotalAttachmentSizeByInlineStatusAsync(bool isInline, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COALESCE(SUM(size_bytes), 0)
+                FROM attachments
+                WHERE is_inline = @isInline AND skipped = 0";
+            cmd.Parameters.AddWithValue("@isInline", isInline ? 1 : 0);
+
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetDistinctFolderPathsAsync(CancellationToken cancellationToken = default)
     {
         return await ExecuteWithLockAsync(async connection =>
@@ -858,6 +940,64 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
                   AND CAST(strftime('%m', received_time) AS INTEGER) = @month
                 ORDER BY received_time DESC";
             cmd.Parameters.AddWithValue("@folderPath", folderPath);
+            cmd.Parameters.AddWithValue("@year", year);
+            cmd.Parameters.AddWithValue("@month", month);
+
+            var messages = new List<Message>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                messages.Add(ReadMessage(reader));
+            }
+
+            return (IReadOnlyList<Message>)messages;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<(int Year, int Month)>> GetDistinctYearMonthsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT DISTINCT
+                    CAST(strftime('%Y', received_time) AS INTEGER) as year,
+                    CAST(strftime('%m', received_time) AS INTEGER) as month
+                FROM messages
+                WHERE quarantined_at IS NULL
+                ORDER BY year DESC, month DESC";
+
+            var yearMonths = new List<(int Year, int Month)>();
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                yearMonths.Add((reader.GetInt32(0), reader.GetInt32(1)));
+            }
+
+            return (IReadOnlyList<(int Year, int Month)>)yearMonths;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Message>> GetMessagesForIndexAsync(
+        int year,
+        int month,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithLockAsync(async connection =>
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT graph_id, immutable_id, local_path, folder_path, subject, sender, recipients,
+                       received_time, size, has_attachments, in_reply_to, conversation_id,
+                       quarantined_at, quarantine_reason, created_at, updated_at
+                FROM messages
+                WHERE quarantined_at IS NULL
+                  AND CAST(strftime('%Y', received_time) AS INTEGER) = @year
+                  AND CAST(strftime('%m', received_time) AS INTEGER) = @month
+                ORDER BY received_time DESC";
             cmd.Parameters.AddWithValue("@year", year);
             cmd.Parameters.AddWithValue("@month", month);
 
@@ -1101,7 +1241,7 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
         {
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                SELECT message_id, transformation_type, applied_at, config_version, output_path
+                SELECT message_id, transformation_type, applied_at, config_version, output_path, output_size_bytes
                 FROM transformations
                 WHERE message_id = @messageId AND transformation_type = @transformationType";
             cmd.Parameters.AddWithValue("@messageId", messageId);
@@ -1124,7 +1264,7 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
         {
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                SELECT message_id, transformation_type, applied_at, config_version, output_path
+                SELECT message_id, transformation_type, applied_at, config_version, output_path, output_size_bytes
                 FROM transformations
                 WHERE message_id = @messageId";
             cmd.Parameters.AddWithValue("@messageId", messageId);
@@ -1147,18 +1287,20 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
         {
             using var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                INSERT INTO transformations (message_id, transformation_type, applied_at, config_version, output_path)
-                VALUES (@messageId, @transformationType, @appliedAt, @configVersion, @outputPath)
+                INSERT INTO transformations (message_id, transformation_type, applied_at, config_version, output_path, output_size_bytes)
+                VALUES (@messageId, @transformationType, @appliedAt, @configVersion, @outputPath, @outputSizeBytes)
                 ON CONFLICT(message_id, transformation_type) DO UPDATE SET
                     applied_at = @appliedAt,
                     config_version = @configVersion,
-                    output_path = @outputPath";
+                    output_path = @outputPath,
+                    output_size_bytes = @outputSizeBytes";
 
             cmd.Parameters.AddWithValue("@messageId", transformation.MessageId);
             cmd.Parameters.AddWithValue("@transformationType", transformation.TransformationType);
             cmd.Parameters.AddWithValue("@appliedAt", transformation.AppliedAt.ToString("O"));
             cmd.Parameters.AddWithValue("@configVersion", transformation.ConfigVersion);
             cmd.Parameters.AddWithValue("@outputPath", transformation.OutputPath);
+            cmd.Parameters.AddWithValue("@outputSizeBytes", transformation.OutputSizeBytes.HasValue ? transformation.OutputSizeBytes.Value : DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }, cancellationToken);
@@ -1290,7 +1432,8 @@ CREATE INDEX idx_attachments_skipped ON attachments(skipped) WHERE skipped = 1;
             TransformationType = reader.GetString(1),
             AppliedAt = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
             ConfigVersion = reader.GetString(3),
-            OutputPath = reader.GetString(4)
+            OutputPath = reader.GetString(4),
+            OutputSizeBytes = reader.IsDBNull(5) ? null : reader.GetInt64(5)
         };
     }
 

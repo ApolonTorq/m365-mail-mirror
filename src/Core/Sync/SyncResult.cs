@@ -177,6 +177,11 @@ public class SyncProgress
     public int TotalMessagesSynced { get; init; }
 
     /// <summary>
+    /// Total messages skipped across all folders (already existed in database).
+    /// </summary>
+    public int TotalMessagesSkipped { get; init; }
+
+    /// <summary>
     /// Current page number being processed (for streaming sync).
     /// </summary>
     public int CurrentPage { get; init; }
@@ -185,4 +190,77 @@ public class SyncProgress
     /// Messages processed in current page.
     /// </summary>
     public int MessagesInCurrentPage { get; init; }
+
+    /// <summary>
+    /// Total messages in the mailbox (sum of all folder counts from Microsoft Graph).
+    /// </summary>
+    public long TotalMailboxMessages { get; init; }
+
+    /// <summary>
+    /// Number of messages already synced in previous runs (from database).
+    /// </summary>
+    public long PreviouslySyncedMessages { get; init; }
+
+    /// <summary>
+    /// Overall sync progress as a percentage (0.0 to 100.0).
+    /// Calculated as: (PreviouslySyncedMessages + TotalMessagesSynced + MessagesSkipped) / TotalMailboxMessages * 100
+    /// where MessagesSkipped represents messages skipped in the current session (already existed).
+    /// </summary>
+    public double? OverallPercentComplete { get; init; }
+
+    /// <summary>
+    /// Total EML bytes synced so far in the current session.
+    /// </summary>
+    public long SessionEmlBytes { get; init; }
+
+    /// <summary>
+    /// Total HTML transformation bytes synced so far in the current session.
+    /// </summary>
+    public long SessionHtmlBytes { get; init; }
+
+    /// <summary>
+    /// Total Markdown transformation bytes synced so far in the current session.
+    /// </summary>
+    public long SessionMarkdownBytes { get; init; }
+
+    /// <summary>
+    /// Total attachment bytes (non-inline) synced so far in the current session.
+    /// </summary>
+    public long SessionAttachmentBytes { get; init; }
+
+    /// <summary>
+    /// Total inline image bytes synced so far in the current session.
+    /// </summary>
+    public long SessionImageBytes { get; init; }
+
+    /// <summary>
+    /// Total EML bytes from previous syncs (from database at sync start).
+    /// </summary>
+    public long PreviousEmlBytes { get; init; }
+
+    /// <summary>
+    /// Total HTML transformation bytes from previous syncs (from database at sync start).
+    /// </summary>
+    public long PreviousHtmlBytes { get; init; }
+
+    /// <summary>
+    /// Total Markdown transformation bytes from previous syncs (from database at sync start).
+    /// </summary>
+    public long PreviousMarkdownBytes { get; init; }
+
+    /// <summary>
+    /// Total attachment bytes (non-inline) from previous syncs (from database at sync start).
+    /// </summary>
+    public long PreviousAttachmentBytes { get; init; }
+
+    /// <summary>
+    /// Total inline image bytes from previous syncs (from database at sync start).
+    /// </summary>
+    public long PreviousImageBytes { get; init; }
+
+    /// <summary>
+    /// The time when the current sync operation started.
+    /// Used for calculating download rate (messages per hour).
+    /// </summary>
+    public DateTimeOffset? SyncStartTime { get; init; }
 }

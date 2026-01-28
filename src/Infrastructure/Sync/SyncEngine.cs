@@ -21,6 +21,18 @@ public class SyncEngine : ISyncEngine
     private readonly IAppLogger _logger;
     private readonly ITransformationService? _transformationService;
 
+    // Session size tracking (accumulated during sync)
+    private long _sessionEmlBytes;
+    private long _sessionHtmlBytes;
+    private long _sessionMarkdownBytes;
+    private long _sessionAttachmentBytes;
+    private long _sessionImageBytes;
+    private long _previousEmlBytes;
+    private long _previousHtmlBytes;
+    private long _previousMarkdownBytes;
+    private long _previousAttachmentBytes;
+    private long _previousImageBytes;
+
     /// <summary>
     /// Default overlap period in minutes for date-based fallback queries.
     /// This catches messages that arrived late or were delayed.
@@ -56,6 +68,7 @@ public class SyncEngine : ISyncEngine
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
+        var syncStartTime = DateTimeOffset.UtcNow;
         var messagesSynced = 0;
         var messagesSkipped = 0;
         var foldersProcessed = 0;
@@ -80,13 +93,48 @@ public class SyncEngine : ISyncEngine
             progressCallback?.Invoke(new SyncProgress
             {
                 Phase = "Enumerating folders",
-                TotalMessagesSynced = messagesSynced
+                TotalMessagesSynced = messagesSynced,
+                SessionEmlBytes = _sessionEmlBytes,
+                SessionHtmlBytes = _sessionHtmlBytes,
+                SessionMarkdownBytes = _sessionMarkdownBytes,
+                SessionAttachmentBytes = _sessionAttachmentBytes,
+                SessionImageBytes = _sessionImageBytes,
+                PreviousEmlBytes = _previousEmlBytes,
+                PreviousHtmlBytes = _previousHtmlBytes,
+                PreviousMarkdownBytes = _previousMarkdownBytes,
+                PreviousAttachmentBytes = _previousAttachmentBytes,
+                PreviousImageBytes = _previousImageBytes,
+                SyncStartTime = syncStartTime
             });
 
             var folders = await _graphClient.GetFoldersAsync(options.Mailbox, cancellationToken);
             var filteredFolders = FilterFolders(folders, options.ExcludeFolders);
 
             _logger.Info("Found {0} folders to sync (excluded {1})", filteredFolders.Count, folders.Count - filteredFolders.Count);
+
+            // Calculate total mailbox messages from folder counts
+            var totalMailboxMessages = filteredFolders.Sum(f => (long)f.TotalItemCount);
+
+            // Get previously synced message count from database
+            var previouslySyncedMessages = await _database.GetMessageCountAsync(cancellationToken);
+
+            // Get historical sizes for progress display and store in instance variables
+            _previousEmlBytes = await _database.GetTotalEmlSizeAsync(cancellationToken);
+            _previousHtmlBytes = await _database.GetTransformationSizeByTypeAsync("html", cancellationToken);
+            _previousMarkdownBytes = await _database.GetTransformationSizeByTypeAsync("markdown", cancellationToken);
+            _previousAttachmentBytes = await _database.GetTotalAttachmentSizeByInlineStatusAsync(false, cancellationToken);
+            _previousImageBytes = await _database.GetTotalAttachmentSizeByInlineStatusAsync(true, cancellationToken);
+            _sessionEmlBytes = 0;
+            _sessionHtmlBytes = 0;
+            _sessionMarkdownBytes = 0;
+            _sessionAttachmentBytes = 0;
+            _sessionImageBytes = 0;
+
+            var totalPreviousTransformed = _previousHtmlBytes + _previousMarkdownBytes + _previousAttachmentBytes + _previousImageBytes;
+            _logger.Info("Mailbox totals: {0} messages in mailbox, {1} previously synced, {2:F2} GB EML, {3:F2} GB transformed",
+                totalMailboxMessages, previouslySyncedMessages,
+                _previousEmlBytes / (1024.0 * 1024 * 1024),
+                totalPreviousTransformed / (1024.0 * 1024 * 1024));
 
             // Phase 4: Store folder mappings
             if (!options.DryRun)
@@ -107,7 +155,23 @@ public class SyncEngine : ISyncEngine
                     TotalFolders = totalFolders,
                     ProcessedFolders = foldersProcessed,
                     TotalMessagesInFolder = folder.TotalItemCount,
-                    TotalMessagesSynced = messagesSynced
+                    TotalMessagesSynced = messagesSynced,
+                    TotalMessagesSkipped = messagesSkipped,
+                    TotalMailboxMessages = totalMailboxMessages,
+                    PreviouslySyncedMessages = previouslySyncedMessages,
+                    OverallPercentComplete = CalculatePercentComplete(
+                        previouslySyncedMessages, messagesSynced, messagesSkipped, totalMailboxMessages),
+                    SessionEmlBytes = _sessionEmlBytes,
+                    SessionHtmlBytes = _sessionHtmlBytes,
+                    SessionMarkdownBytes = _sessionMarkdownBytes,
+                    SessionAttachmentBytes = _sessionAttachmentBytes,
+                    SessionImageBytes = _sessionImageBytes,
+                    PreviousEmlBytes = _previousEmlBytes,
+                    PreviousHtmlBytes = _previousHtmlBytes,
+                    PreviousMarkdownBytes = _previousMarkdownBytes,
+                    PreviousAttachmentBytes = _previousAttachmentBytes,
+                    PreviousImageBytes = _previousImageBytes,
+                    SyncStartTime = syncStartTime
                 });
 
                 _logger.Info("Processing folder: {0} ({1} messages)", folder.FullPath, folder.TotalItemCount);
@@ -117,6 +181,13 @@ public class SyncEngine : ISyncEngine
                     mailbox,
                     options,
                     progressCallback,
+                    totalMailboxMessages,
+                    previouslySyncedMessages,
+                    messagesSynced,
+                    messagesSkipped,
+                    totalFolders,
+                    foldersProcessed,
+                    syncStartTime,
                     cancellationToken);
 
                 messagesSynced += synced;
@@ -268,6 +339,13 @@ public class SyncEngine : ISyncEngine
         string mailbox,
         SyncOptions options,
         SyncProgressCallback? progressCallback,
+        long totalMailboxMessages,
+        long previouslySyncedMessages,
+        int sessionSyncedSoFar,
+        int sessionSkippedSoFar,
+        int totalFolders,
+        int processedFolders,
+        DateTimeOffset syncStartTime,
         CancellationToken cancellationToken)
     {
         var synced = 0;
@@ -339,7 +417,6 @@ public class SyncEngine : ISyncEngine
 
                 // Categorize messages in this page
                 var newMessages = new List<MessageInfo>();
-                var movedMessages = new List<MessageInfo>();
                 var deletedMessages = new List<MessageInfo>();
 
                 foreach (var message in result.Items)
@@ -350,7 +427,9 @@ public class SyncEngine : ISyncEngine
                     }
                     else if (message.IsMoved)
                     {
-                        movedMessages.Add(message);
+                        // Moved messages are ignored - with flat storage, the file stays in its original location
+                        // The message already exists in our archive, no action needed
+                        _logger.Debug("Ignoring moved message {0} (flat storage - no relocation needed)", message.Id);
                     }
                     else
                     {
@@ -358,15 +437,10 @@ public class SyncEngine : ISyncEngine
                     }
                 }
 
-                // Process deletions and moves immediately (these don't checkpoint individually)
+                // Process deletions immediately (these don't checkpoint individually)
                 if (deletedMessages.Count > 0 && !options.DryRun)
                 {
                     errors += await ProcessDeletedMessagesAsync(deletedMessages, options, cancellationToken);
-                }
-
-                if (movedMessages.Count > 0 && !options.DryRun)
-                {
-                    errors += await ProcessMovedMessagesAsync(movedMessages, options, cancellationToken);
                 }
 
                 // Process new messages with mini-batch checkpointing
@@ -389,15 +463,35 @@ public class SyncEngine : ISyncEngine
                 startMessageIndex = 0;
 
                 // Report progress
+                var totalSyncedInSession = sessionSyncedSoFar + synced;
+                var totalSkippedInSession = sessionSkippedSoFar + skipped;
                 progressCallback?.Invoke(new SyncProgress
                 {
                     Phase = "Downloading messages",
                     CurrentFolder = folder.FullPath,
+                    TotalFolders = totalFolders,
+                    ProcessedFolders = processedFolders,
                     TotalMessagesInFolder = folder.TotalItemCount,
                     ProcessedMessagesInFolder = synced + skipped,
-                    TotalMessagesSynced = synced,
+                    TotalMessagesSynced = totalSyncedInSession,
+                    TotalMessagesSkipped = totalSkippedInSession,
                     CurrentPage = pageNumber,
-                    MessagesInCurrentPage = result.Items.Count
+                    MessagesInCurrentPage = result.Items.Count,
+                    TotalMailboxMessages = totalMailboxMessages,
+                    PreviouslySyncedMessages = previouslySyncedMessages,
+                    OverallPercentComplete = CalculatePercentComplete(
+                        previouslySyncedMessages, totalSyncedInSession, totalSkippedInSession, totalMailboxMessages),
+                    SessionEmlBytes = _sessionEmlBytes,
+                    SessionHtmlBytes = _sessionHtmlBytes,
+                    SessionMarkdownBytes = _sessionMarkdownBytes,
+                    SessionAttachmentBytes = _sessionAttachmentBytes,
+                    SessionImageBytes = _sessionImageBytes,
+                    PreviousEmlBytes = _previousEmlBytes,
+                    PreviousHtmlBytes = _previousHtmlBytes,
+                    PreviousMarkdownBytes = _previousMarkdownBytes,
+                    PreviousAttachmentBytes = _previousAttachmentBytes,
+                    PreviousImageBytes = _previousImageBytes,
+                    SyncStartTime = syncStartTime
                 });
 
                 // Check if more pages
@@ -465,7 +559,11 @@ public class SyncEngine : ISyncEngine
                     await _database.DeleteFolderSyncProgressAsync(folder.Id, cancellationToken);
                 }
 
-                return await ProcessFolderStreamingAsync(folder, mailbox, options, progressCallback, cancellationToken);
+                return await ProcessFolderStreamingAsync(
+                    folder, mailbox, options, progressCallback,
+                    totalMailboxMessages, previouslySyncedMessages,
+                    sessionSyncedSoFar, sessionSkippedSoFar,
+                    totalFolders, processedFolders, syncStartTime, cancellationToken);
             }
         }
 
@@ -579,84 +677,6 @@ public class SyncEngine : ISyncEngine
         }
 
         return (synced, skipped, errors);
-    }
-
-    private async Task<int> ProcessMovedMessagesAsync(
-        List<MessageInfo> movedMessages,
-        SyncOptions options,
-        CancellationToken cancellationToken)
-    {
-        var errors = 0;
-
-        foreach (var messageInfo in movedMessages)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                var immutableId = messageInfo.ImmutableId ?? messageInfo.Id;
-                var existingMessage = await _database.GetMessageByImmutableIdAsync(immutableId, cancellationToken);
-
-                if (existingMessage == null)
-                {
-                    _logger.Debug("Moved message {0} not found in database, skipping", immutableId);
-                    continue;
-                }
-
-                if (messageInfo.NewParentFolderId == null)
-                {
-                    _logger.Warning("Moved message {0} has no new parent folder ID", immutableId);
-                    continue;
-                }
-
-                var newFolder = await _database.GetFolderAsync(messageInfo.NewParentFolderId, cancellationToken);
-                if (newFolder == null)
-                {
-                    _logger.Debug("New folder {0} not found in database for moved message {1}", messageInfo.NewParentFolderId, immutableId);
-                    continue;
-                }
-
-                var newFolderPath = newFolder.LocalPath;
-                var oldFolderPath = existingMessage.FolderPath;
-
-                if (string.Equals(newFolderPath, oldFolderPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (options.DryRun)
-                {
-                    _logger.Debug("Would move message {0} from {1} to {2}",
-                        existingMessage.Subject ?? existingMessage.ImmutableId,
-                        oldFolderPath,
-                        newFolderPath);
-                    continue;
-                }
-
-                var newLocalPath = await _emlStorage.MoveEmlAsync(
-                    existingMessage.LocalPath,
-                    newFolderPath,
-                    cancellationToken);
-
-                existingMessage.LocalPath = newLocalPath;
-                existingMessage.FolderPath = newFolderPath;
-                existingMessage.UpdatedAt = DateTimeOffset.UtcNow;
-
-                await _database.UpdateMessageAsync(existingMessage, cancellationToken);
-
-                _logger.Debug("Moved message {0} from {1} to {2}",
-                    existingMessage.Subject ?? existingMessage.ImmutableId,
-                    oldFolderPath,
-                    newFolderPath);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "Error processing moved message {0}: {1}", messageInfo.Id, ex.Message);
-                errors++;
-            }
-        }
-
-        return errors;
     }
 
     private async Task<int> ProcessDeletedMessagesAsync(
@@ -781,6 +801,9 @@ public class SyncEngine : ISyncEngine
 
             var fileSize = _emlStorage.GetFileSize(localPath);
 
+            // Accumulate session EML bytes for progress tracking
+            Interlocked.Add(ref _sessionEmlBytes, fileSize);
+
             var message = new Message
             {
                 GraphId = messageInfo.Id,
@@ -817,12 +840,18 @@ public class SyncEngine : ISyncEngine
                     AttachmentOptions = options.AttachmentOptions
                 };
 
-                var transformSuccess = await _transformationService.TransformSingleMessageAsync(
+                var transformResult = await _transformationService.TransformSingleMessageAsync(
                     message,
                     inlineOptions,
                     cancellationToken);
 
-                if (!transformSuccess)
+                // Accumulate transformed bytes by type for progress tracking
+                Interlocked.Add(ref _sessionHtmlBytes, transformResult.HtmlBytesWritten);
+                Interlocked.Add(ref _sessionMarkdownBytes, transformResult.MarkdownBytesWritten);
+                Interlocked.Add(ref _sessionAttachmentBytes, transformResult.AttachmentBytesWritten);
+                Interlocked.Add(ref _sessionImageBytes, transformResult.ImageBytesWritten);
+
+                if (!transformResult.Success)
                 {
                     _logger.Warning("Inline transformation failed for message {0}", messageInfo.Subject ?? messageInfo.Id);
                     // Note: We don't fail the sync if transformation fails - the EML is still stored
@@ -840,6 +869,32 @@ public class SyncEngine : ISyncEngine
 
     private static bool ShouldTransform(SyncOptions options) =>
         options.GenerateHtml || options.GenerateMarkdown || options.ExtractAttachments;
+
+    /// <summary>
+    /// Calculates overall sync progress as a percentage.
+    /// </summary>
+    /// <param name="previouslySynced">Messages synced in previous runs (from database at sync start).</param>
+    /// <param name="sessionSynced">Messages synced in the current session.</param>
+    /// <param name="sessionSkipped">Messages skipped in the current session (already existed).</param>
+    /// <param name="totalMailboxMessages">Total messages in the mailbox from folder counts.</param>
+    /// <returns>Percentage complete (0.0 to 100.0), or null if total is zero.</returns>
+    private static double? CalculatePercentComplete(
+        long previouslySynced,
+        int sessionSynced,
+        int sessionSkipped,
+        long totalMailboxMessages)
+    {
+        if (totalMailboxMessages <= 0)
+        {
+            return null;
+        }
+
+        // Total processed = previously synced + newly synced in this session
+        // Note: sessionSkipped represents messages we encountered that already existed,
+        // which means they're already counted in previouslySynced, so we don't add them again
+        var totalProcessed = previouslySynced + sessionSynced;
+        return (double)totalProcessed / totalMailboxMessages * 100.0;
+    }
 
     private enum MessageProcessResult
     {

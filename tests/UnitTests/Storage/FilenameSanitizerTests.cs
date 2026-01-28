@@ -292,6 +292,329 @@ public class FilenameSanitizerTests
 
     #endregion
 
+    #region GenerateFolderPrefix Tests
+
+    [Fact]
+    public void GenerateFolderPrefix_SimpleFolder_ReturnsLowercase()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("Inbox");
+
+        result.Should().Be("inbox");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_NestedFolder_JoinsWithDash()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("Inbox/Processed");
+
+        result.Should().Be("inbox-processed");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_DeeplyNestedFolder_JoinsAllLevels()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("Archive/2024/Important");
+
+        result.Should().Be("archive-2024-important");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_FolderWithSpaces_ReplacesWithDash()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("Sent Items");
+
+        result.Should().Be("sent-items");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_FolderWithIllegalChars_ReplacesWithDash()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("Inbox: Work?");
+
+        // Consecutive dashes collapsed to single dash, trailing trimmed
+        result.Should().Be("inbox-work");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_NullInput_ReturnsUnknown()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix(null!);
+
+        result.Should().Be("unknown");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_EmptyString_ReturnsUnknown()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("");
+
+        result.Should().Be("unknown");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_VeryLongPath_Truncated()
+    {
+        var longPath = "Folder/" + string.Join("/", Enumerable.Repeat("Subfolder", 20));
+
+        var result = FilenameSanitizer.GenerateFolderPrefix(longPath, maxLength: 30);
+
+        result.Length.Should().BeLessOrEqualTo(30);
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_ConsecutiveSpaces_CollapsedToSingleDash()
+    {
+        var result = FilenameSanitizer.GenerateFolderPrefix("My   Folder");
+
+        // Multiple consecutive dashes are collapsed to single dash
+        result.Should().Be("my-folder");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_DeepHierarchy_KeepsRootAndDeepest()
+    {
+        // When folder path is too long, keep first (root) and last (deepest) folders
+        var result = FilenameSanitizer.GenerateFolderPrefix(
+            "Inbox/Daily Reports/Iris Daily Reports",
+            maxLength: 30);
+
+        // Should keep "inbox" and "iris-daily-reports", drop "daily-reports"
+        result.Should().Be("inbox-iris-daily-reports");
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_VeryDeepHierarchy_DropsMiddleFolders()
+    {
+        // Deeply nested: Inbox/A/B/C/D/Final Folder
+        var result = FilenameSanitizer.GenerateFolderPrefix(
+            "Inbox/Level One/Level Two/Level Three/Final Destination",
+            maxLength: 30);
+
+        // Should keep root and deepest, drop middle ones
+        result.Should().StartWith("inbox-");
+        result.Should().EndWith("-final-destination");
+        result.Length.Should().BeLessOrEqualTo(30);
+    }
+
+    [Fact]
+    public void GenerateFolderPrefix_TwoFoldersExceedsMax_KeepsBoth()
+    {
+        // Only two folders but combined they're long
+        var result = FilenameSanitizer.GenerateFolderPrefix(
+            "Inbox/Very Long Folder Name Here",
+            maxLength: 25);
+
+        // Should keep both but truncate the deepest if needed
+        result.Should().StartWith("inbox-");
+        result.Length.Should().BeLessOrEqualTo(25);
+    }
+
+    #endregion
+
+    #region SanitizeFilenameForPrefix Tests
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_ValidFilename_ReturnsLowercaseWithDashes()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("Meeting Notes");
+
+        result.Should().Be("meeting-notes");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_NullInput_ReturnsUnnamed()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix(null!);
+
+        result.Should().Be("unnamed");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_EmptyString_ReturnsUnnamed()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("");
+
+        result.Should().Be("unnamed");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_IllegalCharacters_ReplacedWithDash()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("Re: Project Status?");
+
+        // Consecutive dashes collapsed to single dash, trailing trimmed
+        result.Should().Be("re-project-status");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_SpaceDashSpace_CollapsedToSingleDash()
+    {
+        // Common email subject pattern: "Name - Topic - Date"
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("Sharad - IRIS Daily Report - 31st March 2020");
+
+        // " - " becomes "---" then collapsed to "-"
+        result.Should().Be("sharad-iris-daily-report-31st-march-2020");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_MultipleConsecutiveDashes_CollapsedToOne()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("Test---Multiple----Dashes");
+
+        result.Should().Be("test-multiple-dashes");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_VeryLongSubject_Truncated()
+    {
+        var longSubject = new string('A', 200);
+
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix(longSubject, maxLength: 50);
+
+        result.Should().HaveLength(50);
+        result.Should().Be(new string('a', 50)); // lowercase
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_UnicodeCharacters_Preserved()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("会议记录");
+
+        result.Should().Be("会议记录");
+    }
+
+    [Fact]
+    public void SanitizeFilenameForPrefix_MixedCase_AllLowercase()
+    {
+        var result = FilenameSanitizer.SanitizeFilenameForPrefix("URGENT Meeting REMINDER");
+
+        result.Should().Be("urgent-meeting-reminder");
+    }
+
+    #endregion
+
+    #region GenerateEmlFilenameWithPrefixes Tests
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_ValidInput_CorrectFormat()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 45, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixes(
+            "Inbox",
+            "Meeting Notes",
+            receivedTime);
+
+        result.Should().Be("inbox_2024-01-15-10-30-45_meeting-notes.eml");
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_NestedFolder_CorrectFormat()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixes(
+            "Inbox/Processed",
+            "Test",
+            receivedTime);
+
+        result.Should().Be("inbox-processed_2024-01-15-10-30-00_test.eml");
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_NullSubject_UsesNoSubject()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 14, 15, 0, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixes(
+            "Inbox",
+            null,
+            receivedTime);
+
+        result.Should().Be("inbox_2024-01-15-14-15-00_no-subject.eml");
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_SortOrder_FolderThenDate()
+    {
+        var time1 = new DateTimeOffset(2024, 1, 15, 10, 0, 0, TimeSpan.Zero);
+        var time2 = new DateTimeOffset(2024, 1, 15, 11, 0, 0, TimeSpan.Zero);
+
+        var inbox1 = FilenameSanitizer.GenerateEmlFilenameWithPrefixes("Inbox", "A", time1);
+        var inbox2 = FilenameSanitizer.GenerateEmlFilenameWithPrefixes("Inbox", "B", time2);
+        var sent1 = FilenameSanitizer.GenerateEmlFilenameWithPrefixes("Sent Items", "A", time1);
+
+        // Alphabetically: inbox comes before sent
+        string.Compare(inbox1, sent1, StringComparison.Ordinal).Should().BeLessThan(0);
+        // Within inbox, earlier date comes first
+        string.Compare(inbox1, inbox2, StringComparison.Ordinal).Should().BeLessThan(0);
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_MidnightTime_FormatsCorrectly()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 0, 0, 0, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixes(
+            "Inbox",
+            "Test",
+            receivedTime);
+
+        result.Should().Be("inbox_2024-01-15-00-00-00_test.eml");
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixes_VeryLongSubject_Truncated()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
+        var longSubject = new string('A', 200);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixes(
+            "Inbox",
+            longSubject,
+            receivedTime,
+            maxSubjectLength: 50);
+
+        // folder (5) + _ (1) + datetime (19) + _ (1) + subject (50) + .eml (4) = 80
+        result.Should().HaveLength(80);
+        result.Should().StartWith("inbox_2024-01-15-10-30-00_");
+        result.Should().EndWith(".eml");
+    }
+
+    #endregion
+
+    #region GenerateEmlFilenameWithPrefixesAndCounter Tests
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixesAndCounter_Counter1_CorrectFormat()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 45, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixesAndCounter(
+            "Inbox",
+            "Meeting Notes",
+            receivedTime,
+            1);
+
+        result.Should().Be("inbox_2024-01-15-10-30-45_meeting-notes_1.eml");
+    }
+
+    [Fact]
+    public void GenerateEmlFilenameWithPrefixesAndCounter_HighCounter_CorrectFormat()
+    {
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
+
+        var result = FilenameSanitizer.GenerateEmlFilenameWithPrefixesAndCounter(
+            "Inbox/Important",
+            "Test",
+            receivedTime,
+            999);
+
+        result.Should().Be("inbox-important_2024-01-15-10-30-00_test_999.eml");
+    }
+
+    #endregion
+
     #region CalculateMaxSubjectLength Tests
 
     [Fact]
@@ -299,20 +622,18 @@ public class FilenameSanitizerTests
     {
         var result = FilenameSanitizer.CalculateMaxSubjectLength(
             basePath: "C:\\Archive",
-            folderPath: "Inbox",
             dateSubPath: "2024\\01");
 
-        result.Should().Be(100); // Default max
+        result.Should().Be(50); // Default max for prefixed format
     }
 
     [Fact]
     public void CalculateMaxSubjectLength_LongPath_ReturnsReducedLength()
     {
-        var longBasePath = "C:\\" + new string('A', 150);
+        var longBasePath = "C:\\" + new string('A', 200);
 
         var result = FilenameSanitizer.CalculateMaxSubjectLength(
             basePath: longBasePath,
-            folderPath: "Very Long Folder Name",
             dateSubPath: "2024\\01");
 
         result.Should().BeLessThan(100);
@@ -322,11 +643,10 @@ public class FilenameSanitizerTests
     [Fact]
     public void CalculateMaxSubjectLength_VeryLongPath_ReturnsMinimum()
     {
-        var veryLongBasePath = "C:\\" + new string('A', 230);
+        var veryLongBasePath = "C:\\" + new string('A', 240);
 
         var result = FilenameSanitizer.CalculateMaxSubjectLength(
             basePath: veryLongBasePath,
-            folderPath: "Folder",
             dateSubPath: "2024\\01");
 
         result.Should().Be(10); // Minimum

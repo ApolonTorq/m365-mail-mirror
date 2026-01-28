@@ -286,6 +286,66 @@ public class TransformProgress
 public delegate void TransformProgressCallback(TransformProgress progress);
 
 /// <summary>
+/// Result of a single message inline transformation.
+/// </summary>
+public class InlineTransformResult
+{
+    /// <summary>
+    /// Whether the transformation completed successfully.
+    /// </summary>
+    public bool Success { get; init; }
+
+    /// <summary>
+    /// Bytes written by HTML transformation.
+    /// </summary>
+    public long HtmlBytesWritten { get; init; }
+
+    /// <summary>
+    /// Bytes written by Markdown transformation.
+    /// </summary>
+    public long MarkdownBytesWritten { get; init; }
+
+    /// <summary>
+    /// Bytes written by attachment extraction (non-inline).
+    /// </summary>
+    public long AttachmentBytesWritten { get; init; }
+
+    /// <summary>
+    /// Bytes written by inline image extraction.
+    /// </summary>
+    public long ImageBytesWritten { get; init; }
+
+    /// <summary>
+    /// Total bytes written by all transformations (HTML + Markdown + Attachments + Images).
+    /// </summary>
+    public long TotalBytesWritten => HtmlBytesWritten + MarkdownBytesWritten + AttachmentBytesWritten + ImageBytesWritten;
+
+    /// <summary>
+    /// Creates a successful result with per-type bytes written.
+    /// </summary>
+    public static InlineTransformResult Successful(long htmlBytes, long markdownBytes, long attachmentBytes, long imageBytes) => new()
+    {
+        Success = true,
+        HtmlBytesWritten = htmlBytes,
+        MarkdownBytesWritten = markdownBytes,
+        AttachmentBytesWritten = attachmentBytes,
+        ImageBytesWritten = imageBytes
+    };
+
+    /// <summary>
+    /// Creates a failed result.
+    /// </summary>
+    public static InlineTransformResult Failed() => new()
+    {
+        Success = false,
+        HtmlBytesWritten = 0,
+        MarkdownBytesWritten = 0,
+        AttachmentBytesWritten = 0,
+        ImageBytesWritten = 0
+    };
+}
+
+/// <summary>
 /// Service for transforming EML files to other formats.
 /// </summary>
 public interface ITransformationService
@@ -309,8 +369,8 @@ public interface ITransformationService
     /// <param name="message">The message entity that was just stored.</param>
     /// <param name="options">Which transformations to apply (HTML, Markdown, attachments).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>True if transformation succeeded, false if any errors occurred.</returns>
-    Task<bool> TransformSingleMessageAsync(
+    /// <returns>Result containing success status and bytes written.</returns>
+    Task<InlineTransformResult> TransformSingleMessageAsync(
         Message message,
         InlineTransformOptions options,
         CancellationToken cancellationToken = default);

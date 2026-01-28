@@ -48,11 +48,15 @@ public class EmlStorageServiceTests : IDisposable
             "Meeting Notes",
             receivedTime);
 
+        // Path should be: eml/{YYYY}/{MM}/{folder}_{datetime}_{subject}.eml
         relativePath.Should().StartWith("eml");
-        relativePath.Should().Contain("Inbox");
         relativePath.Should().Contain("2024");
         relativePath.Should().Contain("01");
         relativePath.Should().EndWith(".eml");
+        // Folder prefix should be in the filename
+        relativePath.Should().Contain("inbox_");
+        // Datetime should be in the filename
+        relativePath.Should().Contain("2024-01-15-10-30-00");
 
         var fullPath = _service.GetFullPath(relativePath);
         File.Exists(fullPath).Should().BeTrue();
@@ -73,24 +77,22 @@ public class EmlStorageServiceTests : IDisposable
             null,
             receivedTime);
 
-        relativePath.Should().Contain("No Subject");
+        relativePath.Should().Contain("no-subject");
     }
 
     [Fact]
-    public async Task StoreEmlAsync_NestedFolder_CreatesCorrectHierarchy()
+    public async Task StoreEmlAsync_DifferentMonths_CreatesCorrectHierarchy()
     {
         using var stream = new MemoryStream("content"u8.ToArray());
         var receivedTime = new DateTimeOffset(2024, 6, 20, 14, 15, 0, TimeSpan.Zero);
 
         var relativePath = await _service.StoreEmlAsync(
             stream,
-            "Inbox/Important/Projects",
+            "Sent Items",
             "Test",
             receivedTime);
 
-        relativePath.Should().Contain("Inbox");
-        relativePath.Should().Contain("Important");
-        relativePath.Should().Contain("Projects");
+        // Path should contain year/month
         relativePath.Should().Contain("2024");
         relativePath.Should().Contain("06");
 
@@ -106,7 +108,7 @@ public class EmlStorageServiceTests : IDisposable
         using var stream1 = new MemoryStream("content1"u8.ToArray());
         var path1 = await _service.StoreEmlAsync(stream1, "Inbox", "Test", receivedTime);
 
-        // Store second file with same subject and time
+        // Store second file with same folder, subject and time
         using var stream2 = new MemoryStream("content2"u8.ToArray());
         var path2 = await _service.StoreEmlAsync(stream2, "Inbox", "Test", receivedTime);
 
@@ -141,15 +143,15 @@ public class EmlStorageServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StoreEmlAsync_IllegalCharsInFolder_Sanitizes()
+    public async Task StoreEmlAsync_IllegalCharsInSubject_Sanitizes()
     {
         using var stream = new MemoryStream("content"u8.ToArray());
         var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
 
         var relativePath = await _service.StoreEmlAsync(
             stream,
-            "My Folder: Important?",
-            "Test",
+            "Inbox",
+            "Test: Important?",
             receivedTime);
 
         // Should not throw and file should exist
@@ -200,57 +202,6 @@ public class EmlStorageServiceTests : IDisposable
 
     #endregion
 
-    #region MoveEmlAsync Tests
-
-    [Fact]
-    public async Task MoveEmlAsync_ValidMove_MovesFile()
-    {
-        // First create a file
-        using var stream = new MemoryStream("content"u8.ToArray());
-        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
-        var originalPath = await _service.StoreEmlAsync(stream, "Inbox", "Test", receivedTime);
-
-        // Move it
-        var newPath = await _service.MoveEmlAsync(originalPath, "Archive");
-
-        _service.Exists(originalPath).Should().BeFalse();
-        _service.Exists(newPath).Should().BeTrue();
-        newPath.Should().Contain("Archive");
-    }
-
-    [Fact]
-    public async Task MoveEmlAsync_SourceNotFound_ThrowsFileNotFoundException()
-    {
-        var act = async () => await _service.MoveEmlAsync(
-            "eml/Inbox/2024/01/NonExistent.eml",
-            "Archive");
-
-        await act.Should().ThrowAsync<FileNotFoundException>();
-    }
-
-    [Fact]
-    public async Task MoveEmlAsync_CollisionAtDestination_HandlesIt()
-    {
-        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
-
-        // Create file in Inbox
-        using var stream1 = new MemoryStream("content1"u8.ToArray());
-        var path1 = await _service.StoreEmlAsync(stream1, "Inbox", "Test", receivedTime);
-
-        // Create file with same name in Archive
-        using var stream2 = new MemoryStream("content2"u8.ToArray());
-        var path2 = await _service.StoreEmlAsync(stream2, "Archive", "Test", receivedTime);
-
-        // Move first file to Archive (should handle collision)
-        var movedPath = await _service.MoveEmlAsync(path1, "Archive");
-
-        movedPath.Should().NotBe(path2);
-        _service.Exists(movedPath).Should().BeTrue();
-        _service.Exists(path2).Should().BeTrue();
-    }
-
-    #endregion
-
     #region Exists Tests
 
     [Fact]
@@ -266,7 +217,7 @@ public class EmlStorageServiceTests : IDisposable
     [Fact]
     public void Exists_FileDoesNotExist_ReturnsFalse()
     {
-        _service.Exists("eml/Inbox/2024/01/NonExistent.eml").Should().BeFalse();
+        _service.Exists("eml/2024/01/NonExistent.eml").Should().BeFalse();
     }
 
     #endregion
@@ -288,7 +239,7 @@ public class EmlStorageServiceTests : IDisposable
     [Fact]
     public void Delete_NonExistentFile_DoesNotThrow()
     {
-        var act = () => _service.Delete("eml/Inbox/2024/01/NonExistent.eml");
+        var act = () => _service.Delete("eml/2024/01/NonExistent.eml");
 
         act.Should().NotThrow();
     }
@@ -300,7 +251,7 @@ public class EmlStorageServiceTests : IDisposable
     [Fact]
     public void GetFullPath_ValidPath_ReturnsFullPath()
     {
-        var fullPath = _service.GetFullPath("eml/Inbox/2024/01/test.eml");
+        var fullPath = _service.GetFullPath("eml/2024/01/test.eml");
 
         fullPath.Should().StartWith(_tempDir);
         fullPath.Should().Contain("eml");
@@ -348,7 +299,7 @@ public class EmlStorageServiceTests : IDisposable
     [Fact]
     public void OpenRead_NonExistentFile_ThrowsIOException()
     {
-        var act = () => _service.OpenRead("eml/Inbox/2024/01/NonExistent.eml");
+        var act = () => _service.OpenRead("eml/2024/01/NonExistent.eml");
 
         // Can throw FileNotFoundException or DirectoryNotFoundException (both are IOException)
         act.Should().Throw<IOException>();
@@ -369,6 +320,22 @@ public class EmlStorageServiceTests : IDisposable
         var tempPath = fullPath + ".tmp";
 
         File.Exists(tempPath).Should().BeFalse("temp file should be cleaned up after successful write");
+    }
+
+    [Fact]
+    public async Task StoreEmlAsync_WithNestedFolder_IncludesFolderPrefixWithDashes()
+    {
+        using var stream = new MemoryStream("content"u8.ToArray());
+        var receivedTime = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.Zero);
+
+        var relativePath = await _service.StoreEmlAsync(
+            stream,
+            "Inbox/Processed",
+            "Test",
+            receivedTime);
+
+        // Nested folder should use dash as separator
+        relativePath.Should().Contain("inbox-processed_");
     }
 
     #endregion

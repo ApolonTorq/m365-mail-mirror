@@ -263,6 +263,23 @@ m365-mail-mirror sync --checkpoint-interval 20 --parallel 10
 
 All pattern matching is case-insensitive.
 
+**Progress Output Abbreviations**:
+
+During sync, progress is displayed with size aggregates using the following abbreviations:
+
+| Abbreviation | Meaning |
+|--------------|---------|
+| EML | Email files (canonical RFC 2822 MIME format) |
+| HTML | HTML transformed files |
+| MD | Markdown transformed files |
+| ATT | Attachment files (non-inline) |
+| IMG | Inline image files |
+
+Example progress output:
+```
+Progress: page 5, 170/500 [3/16 folders, 34.000%] (2.483% total, 222.5 MB EML, 18.6 MB HTML, 5.2 MB MD)
+```
+
 ### `transform` - Regenerate Outputs from EML Files
 
 Generate or regenerate HTML, Markdown, or attachments from existing EML files.

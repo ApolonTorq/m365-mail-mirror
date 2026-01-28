@@ -54,8 +54,8 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_NoMessages_ReturnsSuccessWithZeroCounts()
     {
-        _mockDatabase.Setup(x => x.GetDistinctFolderPathsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string>());
+        _mockDatabase.Setup(x => x.GetDistinctYearMonthsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int Year, int Month)>());
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
@@ -69,12 +69,12 @@ public class IndexGenerationServiceTests : IDisposable
 
     #endregion
 
-    #region GenerateIndexesAsync Tests - Single Folder
+    #region GenerateIndexesAsync Tests - Single Month
 
     [Fact]
-    public async Task GenerateIndexesAsync_SingleFolder_GeneratesHtmlIndexes()
+    public async Task GenerateIndexesAsync_SingleMonth_GeneratesHtmlIndexes()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 3);
+        SetupYearMonthWithMessages(2024, 1, 3);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -88,23 +88,19 @@ public class IndexGenerationServiceTests : IDisposable
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         File.Exists(rootIndex).Should().BeTrue();
 
-        // Verify folder index exists
-        var folderIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "index.html");
-        File.Exists(folderIndex).Should().BeTrue();
-
         // Verify year index exists
-        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
+        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.html");
         File.Exists(yearIndex).Should().BeTrue();
 
         // Verify month index exists
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
         File.Exists(monthIndex).Should().BeTrue();
     }
 
     [Fact]
-    public async Task GenerateIndexesAsync_SingleFolder_GeneratesMarkdownIndexes()
+    public async Task GenerateIndexesAsync_SingleMonth_GeneratesMarkdownIndexes()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 3);
+        SetupYearMonthWithMessages(2024, 1, 3);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = false, GenerateMarkdownIndexes = true },
@@ -119,14 +115,14 @@ public class IndexGenerationServiceTests : IDisposable
         File.Exists(rootIndex).Should().BeTrue();
 
         // Verify month index exists
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.md");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.md");
         File.Exists(monthIndex).Should().BeTrue();
     }
 
     [Fact]
-    public async Task GenerateIndexesAsync_SingleFolder_GeneratesBothFormats()
+    public async Task GenerateIndexesAsync_SingleMonth_GeneratesBothFormats()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 3);
+        SetupYearMonthWithMessages(2024, 1, 3);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
@@ -145,9 +141,9 @@ public class IndexGenerationServiceTests : IDisposable
     #region Index Content Tests
 
     [Fact]
-    public async Task GenerateIndexesAsync_RootIndex_ContainsLinkToFolder()
+    public async Task GenerateIndexesAsync_RootIndex_ContainsLinkToYear()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 2);
+        SetupYearMonthWithMessages(2024, 1, 2);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -156,7 +152,7 @@ public class IndexGenerationServiceTests : IDisposable
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
-        content.Should().Contain("Inbox/index.html");
+        content.Should().Contain("2024/index.html");
         content.Should().Contain("Mail Archive");
         content.Should().Contain("Archive");
     }
@@ -164,13 +160,13 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_MonthIndex_ContainsEmailLinks()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 2);
+        SetupYearMonthWithMessages(2024, 1, 2);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         content.Should().Contain("Test Subject 1");
@@ -182,32 +178,31 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_HtmlIndex_ContainsBreadcrumbNavigation()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 1);
+        SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         content.Should().Contain("breadcrumb");
         content.Should().Contain("Archive");
-        content.Should().Contain("Inbox");
         content.Should().Contain("2024");
     }
 
     [Fact]
     public async Task GenerateIndexesAsync_HtmlIndex_ContainsUpLink()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 1);
+        SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var folderIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "index.html");
-        var content = await File.ReadAllTextAsync(folderIndex);
+        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.html");
+        var content = await File.ReadAllTextAsync(yearIndex);
 
         content.Should().Contain("../index.html");
         content.Should().Contain("Up");
@@ -216,13 +211,13 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_MarkdownIndex_UsesMarkdownFormat()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 2);
+        SetupYearMonthWithMessages(2024, 1, 2);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = false, GenerateMarkdownIndexes = true },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.md");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.md");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         // Should contain markdown table format
@@ -233,12 +228,12 @@ public class IndexGenerationServiceTests : IDisposable
 
     #endregion
 
-    #region Multiple Folders Tests
+    #region Multiple Years Tests
 
     [Fact]
-    public async Task GenerateIndexesAsync_MultipleFolders_GeneratesIndexesForAll()
+    public async Task GenerateIndexesAsync_MultipleYears_GeneratesIndexesForAll()
     {
-        SetupMultipleFolders(["Inbox", "Sent Items", "Drafts"]);
+        SetupMultipleYearMonths([(2023, 6), (2023, 12), (2024, 1), (2024, 2)]);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -246,13 +241,12 @@ public class IndexGenerationServiceTests : IDisposable
 
         result.Success.Should().BeTrue();
 
-        // Root should link to all folders
+        // Root should link to both years
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
         var content = await File.ReadAllTextAsync(rootIndex);
 
-        content.Should().Contain("Inbox");
-        content.Should().Contain("Sent Items");
-        content.Should().Contain("Drafts");
+        content.Should().Contain("2023");
+        content.Should().Contain("2024");
     }
 
     #endregion
@@ -262,7 +256,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_MultipleMonths_GeneratesMonthIndexes()
     {
-        SetupFolderWithMultipleMonths("Inbox", 2024, [1, 2, 3]);
+        SetupMultipleYearMonths([(2024, 1), (2024, 2), (2024, 3)]);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -271,7 +265,7 @@ public class IndexGenerationServiceTests : IDisposable
         result.Success.Should().BeTrue();
 
         // Year index should link to all months
-        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
+        var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.html");
         var content = await File.ReadAllTextAsync(yearIndex);
 
         content.Should().Contain("January");
@@ -282,7 +276,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_MonthLinks_UseNumericFolderNames()
     {
-        SetupFolderWithMultipleMonths("Inbox", 2024, [1, 2, 12]);
+        SetupMultipleYearMonths([(2024, 1), (2024, 2), (2024, 12)]);
 
         var result = await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
@@ -291,7 +285,7 @@ public class IndexGenerationServiceTests : IDisposable
         result.Success.Should().BeTrue();
 
         // HTML: Year index should use numeric folder paths for month links
-        var htmlYearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.html");
+        var htmlYearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.html");
         var htmlContent = await File.ReadAllTextAsync(htmlYearIndex);
 
         // Links should use "01/index.html", not "January/index.html"
@@ -303,7 +297,7 @@ public class IndexGenerationServiceTests : IDisposable
         htmlContent.Should().NotContain("December/index.html");
 
         // Markdown: Year index should use numeric folder paths for month links
-        var mdYearIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "index.md");
+        var mdYearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.md");
         var mdContent = await File.ReadAllTextAsync(mdYearIndex);
 
         // Links should use "01/index.md", not "January/index.md"
@@ -322,7 +316,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_CancellationRequested_ReturnsCancelledResult()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 1);
+        SetupYearMonthWithMessages(2024, 1, 1);
 
         var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -342,13 +336,13 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_MessageWithAttachment_ShowsAttachmentIcon()
     {
-        SetupSingleMessageWithAttachment("Inbox", 2024, 1);
+        SetupSingleMessageWithAttachment(2024, 1);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
             CancellationToken.None);
 
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "Inbox", "2024", "01", "index.html");
+        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
         var content = await File.ReadAllTextAsync(monthIndex);
 
         // HTML entity for paperclip
@@ -362,7 +356,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_Index_ContainsMessageCount()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 5);
+        SetupYearMonthWithMessages(2024, 1, 5);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -377,7 +371,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_SingleMessage_UseSingularForm()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 1);
+        SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -397,7 +391,7 @@ public class IndexGenerationServiceTests : IDisposable
     [Fact]
     public async Task GenerateIndexesAsync_HtmlIndex_ContainsOutlookLikeStyling()
     {
-        SetupSingleFolderWithMessages("Inbox", 2024, 1, 1);
+        SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
             new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
@@ -415,59 +409,33 @@ public class IndexGenerationServiceTests : IDisposable
 
     #region Helper Methods
 
-    private void SetupSingleFolderWithMessages(string folderPath, int year, int month, int messageCount)
+    private void SetupYearMonthWithMessages(int year, int month, int messageCount)
     {
-        _mockDatabase.Setup(x => x.GetDistinctFolderPathsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string> { folderPath });
+        _mockDatabase.Setup(x => x.GetDistinctYearMonthsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int Year, int Month)> { (year, month) });
 
-        _mockDatabase.Setup(x => x.GetDistinctYearMonthsForFolderAsync(folderPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<(int, int)> { (year, month) });
-
-        var messages = CreateTestMessages(folderPath, year, month, messageCount);
-        _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(folderPath, year, month, It.IsAny<CancellationToken>()))
+        var messages = CreateTestMessages(year, month, messageCount);
+        _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(year, month, It.IsAny<CancellationToken>()))
             .ReturnsAsync(messages);
     }
 
-    private void SetupMultipleFolders(string[] folderPaths)
+    private void SetupMultipleYearMonths((int Year, int Month)[] yearMonths)
     {
-        _mockDatabase.Setup(x => x.GetDistinctFolderPathsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(folderPaths.ToList());
+        _mockDatabase.Setup(x => x.GetDistinctYearMonthsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(yearMonths.ToList());
 
-        foreach (var folderPath in folderPaths)
+        foreach (var (year, month) in yearMonths)
         {
-            _mockDatabase.Setup(x => x.GetDistinctYearMonthsForFolderAsync(folderPath, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new List<(int, int)> { (2024, 1) });
-
-            var messages = CreateTestMessages(folderPath, 2024, 1, 1);
-            _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(folderPath, 2024, 1, It.IsAny<CancellationToken>()))
+            var messages = CreateTestMessages(year, month, 1);
+            _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(year, month, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(messages);
         }
     }
 
-    private void SetupFolderWithMultipleMonths(string folderPath, int year, int[] months)
+    private void SetupSingleMessageWithAttachment(int year, int month)
     {
-        _mockDatabase.Setup(x => x.GetDistinctFolderPathsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string> { folderPath });
-
-        var yearMonths = months.Select(m => (year, m)).ToList();
-        _mockDatabase.Setup(x => x.GetDistinctYearMonthsForFolderAsync(folderPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(yearMonths);
-
-        foreach (var month in months)
-        {
-            var messages = CreateTestMessages(folderPath, year, month, 1);
-            _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(folderPath, year, month, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(messages);
-        }
-    }
-
-    private void SetupSingleMessageWithAttachment(string folderPath, int year, int month)
-    {
-        _mockDatabase.Setup(x => x.GetDistinctFolderPathsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string> { folderPath });
-
-        _mockDatabase.Setup(x => x.GetDistinctYearMonthsForFolderAsync(folderPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<(int, int)> { (year, month) });
+        _mockDatabase.Setup(x => x.GetDistinctYearMonthsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int Year, int Month)> { (year, month) });
 
         var messages = new List<Message>
         {
@@ -475,8 +443,8 @@ public class IndexGenerationServiceTests : IDisposable
             {
                 GraphId = "msg-1",
                 ImmutableId = "imm-1",
-                LocalPath = $"eml/{folderPath}/{year}/{month:D2}/Email_1000.eml",
-                FolderPath = folderPath,
+                LocalPath = $"eml/{year}/{month:D2}/inbox_{year}-{month:D2}-15-10-00-00_email-with-attachment.eml",
+                FolderPath = "Inbox",
                 Subject = "Email with attachment",
                 Sender = "sender@example.com",
                 ReceivedTime = new DateTimeOffset(year, month, 15, 10, 0, 0, TimeSpan.Zero),
@@ -487,11 +455,11 @@ public class IndexGenerationServiceTests : IDisposable
             }
         };
 
-        _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(folderPath, year, month, It.IsAny<CancellationToken>()))
+        _mockDatabase.Setup(x => x.GetMessagesForIndexAsync(year, month, It.IsAny<CancellationToken>()))
             .ReturnsAsync(messages);
     }
 
-    private static List<Message> CreateTestMessages(string folderPath, int year, int month, int count)
+    private static List<Message> CreateTestMessages(int year, int month, int count)
     {
         var messages = new List<Message>();
         for (var i = 1; i <= count; i++)
@@ -500,8 +468,8 @@ public class IndexGenerationServiceTests : IDisposable
             {
                 GraphId = $"msg-{i}",
                 ImmutableId = $"imm-{i}",
-                LocalPath = $"eml/{folderPath}/{year}/{month:D2}/Email_{i:D4}_{1000 + i * 10:D4}.eml",
-                FolderPath = folderPath,
+                LocalPath = $"eml/{year}/{month:D2}/inbox_{year}-{month:D2}-{i:D2}-10-00-00_test-subject-{i}.eml",
+                FolderPath = "Inbox",
                 Subject = $"Test Subject {i}",
                 Sender = "sender@example.com",
                 ReceivedTime = new DateTimeOffset(year, month, i, 10, 0, 0, TimeSpan.Zero),

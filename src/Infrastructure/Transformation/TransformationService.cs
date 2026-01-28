@@ -161,7 +161,7 @@ public class TransformationService : ITransformationService
                     // Process all transformation types for this message (attachments first for dependency)
                     foreach (var transformType in transformTypes)
                     {
-                        var result = await TransformMessageAsync(message, transformType, options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                        var (result, _, _, _) = await TransformMessageAsync(message, transformType, options.HtmlOptions, options.AttachmentOptions, cancellationToken);
                         if (result == TransformMessageResult.Transformed)
                             messageTransformed++;
                         else if (result == TransformMessageResult.Error)
@@ -251,7 +251,7 @@ public class TransformationService : ITransformationService
         return allMessages;
     }
 
-    private async Task<TransformMessageResult> TransformMessageAsync(
+    private async Task<(TransformMessageResult Result, long BytesWritten, long AttachmentBytes, long ImageBytes)> TransformMessageAsync(
         Message message,
         string transformType,
         HtmlTransformOptions? htmlOptions,
@@ -295,7 +295,7 @@ public class TransformationService : ITransformationService
                     }
                 }
 
-                return TransformMessageResult.Error;
+                return (TransformMessageResult.Error, 0, 0, 0);
             }
 
             // Load the MIME message
@@ -307,20 +307,32 @@ public class TransformationService : ITransformationService
 
             // Perform the transformation
             string outputPath;
+            long outputSizeBytes = 0;
+            long attachmentBytes = 0;
+            long imageBytes = 0;
             switch (transformType)
             {
                 case "html":
-                    outputPath = await TransformToHtmlAsync(message, mimeMessage, htmlOptions, cancellationToken);
+                    var htmlResult = await TransformToHtmlAsync(message, mimeMessage, htmlOptions, cancellationToken);
+                    outputPath = htmlResult.Path;
+                    outputSizeBytes = htmlResult.SizeBytes;
                     break;
                 case "markdown":
-                    outputPath = await TransformToMarkdownAsync(message, mimeMessage, htmlOptions, cancellationToken);
+                    var mdResult = await TransformToMarkdownAsync(message, mimeMessage, htmlOptions, cancellationToken);
+                    outputPath = mdResult.Path;
+                    outputSizeBytes = mdResult.SizeBytes;
                     break;
                 case "attachments":
-                    outputPath = await ExtractAttachmentsAsync(message, mimeMessage, attachmentOptions, cancellationToken);
+                    // For attachments, get separate sizes for regular attachments and inline images
+                    var attachmentResult = await ExtractAttachmentsWithSizeAsync(message, mimeMessage, attachmentOptions, cancellationToken);
+                    outputPath = attachmentResult.Path;
+                    attachmentBytes = attachmentResult.AttachmentBytes;
+                    imageBytes = attachmentResult.ImageBytes;
+                    outputSizeBytes = attachmentBytes + imageBytes;
                     break;
                 default:
                     _logger.Warning("Unknown transformation type: {0}", transformType);
-                    return TransformMessageResult.Error;
+                    return (TransformMessageResult.Error, 0, 0, 0);
             }
 
             // Record the transformation in the database
@@ -330,13 +342,14 @@ public class TransformationService : ITransformationService
                 TransformationType = transformType,
                 AppliedAt = DateTimeOffset.UtcNow,
                 ConfigVersion = CurrentConfigVersion,
-                OutputPath = outputPath
+                OutputPath = outputPath,
+                OutputSizeBytes = outputSizeBytes > 0 ? outputSizeBytes : null
             };
 
             await _database.UpsertTransformationAsync(transformation, cancellationToken);
 
             _logger.Debug("Transformed {0} ({1}): {2}", message.Subject ?? message.GraphId, transformType, outputPath);
-            return TransformMessageResult.Transformed;
+            return (TransformMessageResult.Transformed, outputSizeBytes, attachmentBytes, imageBytes);
         }
         catch (OperationCanceledException)
         {
@@ -347,17 +360,17 @@ public class TransformationService : ITransformationService
         {
             _logger.Error(ex, "Error transforming message {0} [GraphId={1}] ({2}): {3}\nStack trace: {4}",
                 message.LocalPath, message.GraphId, transformType, ex.Message, ex.StackTrace ?? "(no stack trace)");
-            return TransformMessageResult.Error;
+            return (TransformMessageResult.Error, 0, 0, 0);
         }
     }
 
-    private async Task<string> TransformToHtmlAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
+    private async Task<(string Path, long SizeBytes)> TransformToHtmlAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _logger.Debug("Starting HTML transformation for message {0}", message.LocalPath);
 
-        // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.html
-        var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
+        // Build output path: transformed/{YYYY}/{MM}/{filename}.html
+        var outputDir = BuildOutputDirectory("transformed", message.ReceivedTime);
         Directory.CreateDirectory(Path.Combine(_archiveRoot, outputDir));
 
         var filename = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath)) + ".html";
@@ -375,16 +388,19 @@ public class TransformationService : ITransformationService
 
         await File.WriteAllTextAsync(fullPath, html, cancellationToken);
 
-        return outputPath;
+        // Get file size after writing
+        var fileSize = new FileInfo(fullPath).Length;
+
+        return (outputPath, fileSize);
     }
 
-    private async Task<string> TransformToMarkdownAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
+    private async Task<(string Path, long SizeBytes)> TransformToMarkdownAsync(Message message, MimeMessage mimeMessage, HtmlTransformOptions? htmlOptions, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _logger.Debug("Starting Markdown transformation for message {0}", message.LocalPath);
 
-        // Build output path: transformed/{folder}/{YYYY}/{MM}/{filename}.md
-        var outputDir = BuildOutputDirectory("transformed", message.FolderPath, message.ReceivedTime);
+        // Build output path: transformed/{YYYY}/{MM}/{filename}.md
+        var outputDir = BuildOutputDirectory("transformed", message.ReceivedTime);
         Directory.CreateDirectory(Path.Combine(_archiveRoot, outputDir));
 
         var filename = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath)) + ".md";
@@ -402,7 +418,10 @@ public class TransformationService : ITransformationService
 
         await File.WriteAllTextAsync(fullPath, markdown, cancellationToken);
 
-        return outputPath;
+        // Get file size after writing
+        var fileSize = new FileInfo(fullPath).Length;
+
+        return (outputPath, fileSize);
     }
 
     private async Task<string> ExtractAttachmentsAsync(Message message, MimeMessage mimeMessage, AttachmentExtractOptions? attachmentOptions, CancellationToken cancellationToken)
@@ -413,10 +432,10 @@ public class TransformationService : ITransformationService
         await _database.DeleteAttachmentsForMessageAsync(message.GraphId, cancellationToken);
 
         // Build paths for the new structure:
-        // - Inline images: transformed/{folder}/{YYYY}/{MM}/images/{email_filename}_{n}.{ext}
-        // - Regular attachments: transformed/{folder}/{YYYY}/{MM}/attachments/{email_filename}_attachments/{filename}
-        var imagesDir = BuildOutputDirectory("images", message.FolderPath, message.ReceivedTime);
-        var attachmentsBaseDir = BuildOutputDirectory("attachments", message.FolderPath, message.ReceivedTime);
+        // - Inline images: transformed/{YYYY}/{MM}/images/{email_filename}_{n}.{ext}
+        // - Regular attachments: transformed/{YYYY}/{MM}/attachments/{email_filename}_attachments/{filename}
+        var imagesDir = BuildOutputDirectory("images", message.ReceivedTime);
+        var attachmentsBaseDir = BuildOutputDirectory("attachments", message.ReceivedTime);
         var emailBaseName = Path.GetFileNameWithoutExtension(Path.GetFileName(message.LocalPath));
         var attachmentDir = Path.Combine(attachmentsBaseDir, $"{emailBaseName}_attachments");
 
@@ -674,6 +693,25 @@ public class TransformationService : ITransformationService
     }
 
     /// <summary>
+    /// Extracts attachments and returns the path, attachment bytes, and inline image bytes.
+    /// </summary>
+    private async Task<(string Path, long AttachmentBytes, long ImageBytes)> ExtractAttachmentsWithSizeAsync(
+        Message message,
+        MimeMessage mimeMessage,
+        AttachmentExtractOptions? attachmentOptions,
+        CancellationToken cancellationToken)
+    {
+        var path = await ExtractAttachmentsAsync(message, mimeMessage, attachmentOptions, cancellationToken);
+
+        // Sum up bytes separately for inline images vs regular attachments
+        var attachments = await _database.GetAttachmentsForMessageAsync(message.GraphId, cancellationToken);
+        var attachmentBytes = attachments.Where(a => !a.IsInline && !a.Skipped).Sum(a => a.SizeBytes);
+        var imageBytes = attachments.Where(a => a.IsInline && !a.Skipped).Sum(a => a.SizeBytes);
+
+        return (path, attachmentBytes, imageBytes);
+    }
+
+    /// <summary>
     /// Gets a file extension from a MIME content type.
     /// </summary>
     private static string? GetExtensionFromContentType(string? contentType)
@@ -743,11 +781,10 @@ public class TransformationService : ITransformationService
         }
     }
 
-    private static string BuildOutputDirectory(string outputType, string folderPath, DateTimeOffset receivedTime)
+    private static string BuildOutputDirectory(string outputType, DateTimeOffset receivedTime)
     {
         var basePath = Path.Combine(
             "transformed",
-            folderPath,
             receivedTime.Year.ToString("D4", CultureInfo.InvariantCulture),
             receivedTime.Month.ToString("D2", CultureInfo.InvariantCulture));
 
@@ -1056,15 +1093,19 @@ to: ""{EscapeYamlString(toAddress)}""
     }
 
     /// <inheritdoc />
-    public async Task<bool> TransformSingleMessageAsync(
+    public async Task<InlineTransformResult> TransformSingleMessageAsync(
         Message message,
         InlineTransformOptions options,
         CancellationToken cancellationToken = default)
     {
         if (!options.HasAnyTransformation)
-            return true;
+            return InlineTransformResult.Successful(0, 0, 0, 0);
 
         var success = true;
+        long htmlBytes = 0;
+        long markdownBytes = 0;
+        long attachmentBytes = 0;
+        long imageBytes = 0;
 
         try
         {
@@ -1072,7 +1113,9 @@ to: ""{EscapeYamlString(toAddress)}""
             // are available when generating HTML/Markdown output
             if (options.ExtractAttachments)
             {
-                var result = await TransformMessageAsync(message, "attachments", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                var (result, _, attBytes, imgBytes) = await TransformMessageAsync(message, "attachments", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                attachmentBytes = attBytes;
+                imageBytes = imgBytes;
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
@@ -1082,7 +1125,8 @@ to: ""{EscapeYamlString(toAddress)}""
 
             if (options.GenerateHtml)
             {
-                var result = await TransformMessageAsync(message, "html", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                var (result, bytes, _, _) = await TransformMessageAsync(message, "html", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                htmlBytes = bytes;
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
@@ -1092,7 +1136,8 @@ to: ""{EscapeYamlString(toAddress)}""
 
             if (options.GenerateMarkdown)
             {
-                var result = await TransformMessageAsync(message, "markdown", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                var (result, bytes, _, _) = await TransformMessageAsync(message, "markdown", options.HtmlOptions, options.AttachmentOptions, cancellationToken);
+                markdownBytes = bytes;
                 if (result == TransformMessageResult.Error)
                 {
                     success = false;
@@ -1100,7 +1145,16 @@ to: ""{EscapeYamlString(toAddress)}""
                 }
             }
 
-            return success;
+            return success
+                ? InlineTransformResult.Successful(htmlBytes, markdownBytes, attachmentBytes, imageBytes)
+                : new InlineTransformResult
+                {
+                    Success = false,
+                    HtmlBytesWritten = htmlBytes,
+                    MarkdownBytesWritten = markdownBytes,
+                    AttachmentBytesWritten = attachmentBytes,
+                    ImageBytesWritten = imageBytes
+                };
         }
         catch (OperationCanceledException)
         {
@@ -1111,7 +1165,7 @@ to: ""{EscapeYamlString(toAddress)}""
         {
             _logger.Error(ex, "Error during inline transformation of message {0} [GraphId={1}]: {2}",
                 message.LocalPath, message.GraphId, ex.Message);
-            return false;
+            return InlineTransformResult.Failed();
         }
     }
 

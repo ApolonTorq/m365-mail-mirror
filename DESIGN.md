@@ -212,48 +212,45 @@ See [ADR-003: EML-First Storage with Configurable Transformations](decisions/adr
 
 ### Directory Structure
 
+See [ADR-012: Flat Date-Based Storage](decisions/adr-012-flat-date-based-storage.md) for rationale.
+
 ```
 <mail-root>/
 ├── status/                           # Status and state tracking
 │   └── .sync.db                      # SQLite state database
-├── eml/                              # Canonical EML files
-│   ├── Inbox/
-│   │   ├── 2024/
-│   │   │   └── 01/
-│   │   │       ├── Meeting_Notes_1030.eml
-│   │   │       └── Project_Update_1415.eml
-│   │   └── Subfolder/
-│   │       └── 2024/01/...
-│   ├── Sent Items/
-│   │   └── 2024/01/...
-│   └── Archive/
-│       └── 2024/01/...
+├── eml/                              # Canonical EML files (flat by date)
+│   └── 2024/
+│       ├── 01/
+│       │   ├── Meeting_Notes_1030.eml
+│       │   └── Project_Update_1415.eml
+│       └── 02/
+│           └── Monthly_Report_0900.eml
 ├── transformed/                      # All derived content (if enabled)
-│   ├── Inbox/
-│   │   └── 2024/
-│   │       └── 01/
-│   │           ├── Meeting_Notes_1030.html      # HTML email view
-│   │           ├── Meeting_Notes_1030.md        # Markdown email view
-│   │           ├── Project_Update_1415.html
-│   │           ├── Project_Update_1415.md
-│   │           ├── index.html                   # Folder navigation (HTML)
-│   │           ├── index.md                     # Folder navigation (Markdown)
-│   │           ├── images/                      # Inline images (cid: references)
-│   │           │   ├── Meeting_Notes_1030_1.png
-│   │           │   └── Project_Update_1415_1.jpg
-│   │           └── attachments/                 # Regular attachments
-│   │               ├── Meeting_Notes_1030_attachments/
-│   │               │   └── document.pdf
-│   │               └── Project_Update_1415_attachments/
-│   │                   └── report.xlsx
-│   └── Sent Items/...
+│   └── 2024/
+│       └── 01/
+│           ├── Meeting_Notes_1030.html      # HTML email view
+│           ├── Meeting_Notes_1030.md        # Markdown email view
+│           ├── Project_Update_1415.html
+│           ├── Project_Update_1415.md
+│           ├── index.html                   # Navigation index (HTML)
+│           ├── index.md                     # Navigation index (Markdown)
+│           ├── images/                      # Inline images (cid: references)
+│           │   ├── Meeting_Notes_1030_1.png
+│           │   └── Project_Update_1415_1.jpg
+│           └── attachments/                 # Regular attachments
+│               ├── Meeting_Notes_1030_attachments/
+│               │   └── document.pdf
+│               └── Project_Update_1415_attachments/
+│                   └── report.xlsx
 ├── _Quarantine/                      # Deleted messages
-│   └── eml/                          # Preserves original structure
-│       └── Inbox/2024/01/...
+│   └── eml/                          # Preserves date structure
+│       └── 2024/01/...
 └── _Errors/                          # Malformed messages
     └── {message-id}/
         └── raw-response.json
 ```
+
+**Note**: While M365 folders (Inbox, Sent Items, etc.) are still traversed via the Graph API for delta sync, the local storage is organized only by received date. Folder information is preserved as metadata in the database (`folder_path` column) for filtering and queries.
 
 ### File Naming Algorithm
 
@@ -312,8 +309,8 @@ See [ADR-003](decisions/adr-003-eml-first-storage-with-transformations.md) and [
 
 ```
 1. Download EML from Graph API
-2. Write EML to eml/{folder}/{YYYY}/{MM}/{filename}.eml
-3. Insert message into database
+2. Write EML to eml/{YYYY}/{MM}/{filename}.eml
+3. Insert message into database (folder_path stored as metadata)
 4. IF generate_html: Generate HTML from EML
 5. IF generate_markdown: Generate Markdown from EML
 6. IF extract_attachments: Extract attachments from EML
@@ -461,7 +458,7 @@ Email body converted to Markdown...
 **Folder structure**:
 
 ```
-transformed/{folder}/{YYYY}/{MM}/attachments/{message}_attachments/
+transformed/{YYYY}/{MM}/attachments/{message}_attachments/
 ├── document.pdf
 ├── spreadsheet.xlsx
 ├── image.png
@@ -567,7 +564,7 @@ zip_extraction:
 **Extraction folder structure**:
 
 ```
-transformed/Inbox/2024/01/attachments/Message_1030_attachments/
+transformed/2024/01/attachments/Message_1030_attachments/
 ├── report.zip                     # Original ZIP (always kept)
 ├── report.zip_extracted/          # Extracted contents
 │   ├── summary.txt
@@ -612,8 +609,8 @@ bool IsSafePath(string zipEntryPath)
 **Logging examples**:
 
 ```
-[INFO] Extracted ZIP: report.zip (15 files) - transformed/Inbox/2024/01/attachments/Message_1030_attachments/report.zip_extracted/
-[WARN] Skipped encrypted ZIP: passwords.zip - transformed/Inbox/2024/01/attachments/Message_1030_attachments/passwords.zip
+[INFO] Extracted ZIP: report.zip (15 files) - transformed/2024/01/attachments/Message_1030_attachments/report.zip_extracted/
+[WARN] Skipped encrypted ZIP: passwords.zip - transformed/2024/01/attachments/Message_1030_attachments/passwords.zip
 [WARN] Skipped ZIP with unsafe paths: malicious.zip (contains ../../../etc/passwd)
 [WARN] Skipped ZIP with executables: installer.zip (contains setup.exe)
 [WARN] Skipped large ZIP: archive.zip (1,523 files exceeds max_files: 100)
@@ -794,24 +791,9 @@ Prefer: odata.maxpagesize=100
 
 **Folder moves**:
 
-Delta query indicates folder move:
+See [ADR-012: Flat Date-Based Storage](decisions/adr-012-flat-date-based-storage.md) for rationale.
 
-```json
-{
-  "@removed": {
-    "reason": "changed"
-  },
-  "parentFolderId": "new-parent-id"
-}
-```
-
-**Handling**:
-
-1. Detect folder move via `@removed.reason = "changed"`
-2. Look up new folder location
-3. Move EML file: `eml/OldFolder/...` → `eml/NewFolder/...`
-4. Move transformations: `html/OldFolder/...` → `html/NewFolder/...`
-5. Update database: `folder_path` column
+With flat date-based storage, folder moves in M365 are **ignored**. When a message is moved from one folder to another in the mailbox (e.g., Inbox → Archive), the delta query indicates this via `@removed.reason = "changed"`. However, since local storage is organized by date only, no file relocation is needed. The message remains at its original location in `eml/{YYYY}/{MM}/` and the `folder_path` metadata in the database may be optionally updated for query purposes.
 
 ### Deletion Handling
 
@@ -830,13 +812,12 @@ Delta query indicates deletion:
 **Quarantine operation**:
 
 ```
-1. Look up message in database
-2. Move EML: eml/{folder}/ → _Quarantine/eml/{folder}/
-3. Move HTML: html/{folder}/ → _Quarantine/html/{folder}/
-4. Move Markdown: markdown/{folder}/ → _Quarantine/markdown/{folder}/
-5. Move attachments: transformed/{folder}/.../attachments/ → _Quarantine/transformed/{folder}/.../attachments/
-6. Update database: SET quarantined_at = now(), quarantine_reason = 'deleted_in_m365'
+1. Look up message in database (get local_path)
+2. Move EML: eml/{YYYY}/{MM}/{file}.eml → _Quarantine/eml/{YYYY}/{MM}/{file}.eml
+3. Update database: SET quarantined_at = now(), quarantine_reason = 'deleted_in_m365'
 ```
+
+**Note**: Transformation files (HTML, Markdown, attachments) are currently not cleaned up during quarantine. They remain as orphaned files in the `transformed/` directory. This is a known limitation.
 
 ### Malformed Messages
 

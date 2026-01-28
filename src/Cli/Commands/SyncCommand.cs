@@ -197,12 +197,37 @@ public class SyncCommand : BaseCommand
         var lastFolder = "";
         var lastReportedSynced = 0;
         var lastReportedPage = 0;
+        var hasActiveProgressLine = false;
+        var lastProgressLineLength = 0;
+        var shownMailboxTotals = false;
+
+        // Use in-place progress updates when running in an interactive terminal
+        var useInPlaceProgress = !console.IsOutputRedirected;
 
         var result = await syncEngine.SyncAsync(syncOptions, progress =>
         {
+            // Show mailbox totals once when we first receive them (after folder enumeration)
+            if (!shownMailboxTotals && progress.TotalMailboxMessages > 0)
+            {
+                shownMailboxTotals = true;
+                var startPercent = progress.PreviouslySyncedMessages > 0 && progress.TotalMailboxMessages > 0
+                    ? (double)progress.PreviouslySyncedMessages / progress.TotalMailboxMessages * 100.0
+                    : 0.0;
+                console.Output.WriteLine($"Mailbox: {progress.TotalMailboxMessages:N0} messages total, {progress.PreviouslySyncedMessages:N0} previously synced ({startPercent:F3}%)");
+                console.Output.WriteLine();
+            }
+
             // Always show folder changes with summary info
             if (progress.Phase != lastPhase || progress.CurrentFolder != lastFolder)
             {
+                // Clear the in-place progress line before showing new folder
+                if (useInPlaceProgress && hasActiveProgressLine)
+                {
+                    // Move to start of line and clear it
+                    console.Output.Write($"\r{new string(' ', lastProgressLineLength)}\r");
+                    hasActiveProgressLine = false;
+                }
+
                 // Show completion summary for previous folder if we had progress
                 if (!string.IsNullOrEmpty(lastFolder) && lastPhase == "Downloading messages" && lastReportedSynced > 0)
                 {
@@ -242,10 +267,95 @@ public class SyncCommand : BaseCommand
                     lastReportedPage = progress.CurrentPage;
 
                     var pageInfo = progress.CurrentPage > 0 ? $"page {progress.CurrentPage}, " : "";
-                    console.Output.WriteLine($"  Progress: {pageInfo}{progress.TotalMessagesSynced} synced, {progress.ProcessedMessagesInFolder}/{progress.TotalMessagesInFolder} in folder");
+
+                    // Build folder progress: "X/Y folders (Z%)" where Z% is progress within current folder
+                    var folderProgressText = "";
+                    if (progress.TotalFolders > 0)
+                    {
+                        var currentFolderNum = progress.ProcessedFolders + 1; // +1 because we're currently processing this folder
+                        var currentFolderPercent = progress.TotalMessagesInFolder > 0
+                            ? (double)progress.ProcessedMessagesInFolder / progress.TotalMessagesInFolder * 100.0
+                            : 0.0;
+                        folderProgressText = $" [{currentFolderNum}/{progress.TotalFolders} folders, {currentFolderPercent:F3}%]";
+                    }
+
+                    // Calculate total file sizes (previous + session) per type
+                    var totalEmlBytes = progress.PreviousEmlBytes + progress.SessionEmlBytes;
+                    var totalHtmlBytes = progress.PreviousHtmlBytes + progress.SessionHtmlBytes;
+                    var totalMarkdownBytes = progress.PreviousMarkdownBytes + progress.SessionMarkdownBytes;
+                    var totalAttachmentBytes = progress.PreviousAttachmentBytes + progress.SessionAttachmentBytes;
+                    var totalImageBytes = progress.PreviousImageBytes + progress.SessionImageBytes;
+
+                    // Build combined stats in parentheses: (X% total, Y MB EML[, per-type aggregates])
+                    var statsText = "";
+                    if (progress.OverallPercentComplete.HasValue || totalEmlBytes > 0)
+                    {
+                        var parts = new List<string>();
+                        if (progress.OverallPercentComplete.HasValue)
+                        {
+                            parts.Add($"{progress.OverallPercentComplete.Value:F3}% total");
+                        }
+                        if (totalEmlBytes > 0)
+                        {
+                            parts.Add($"{FormatFileSize(totalEmlBytes)} EML");
+                        }
+                        // Add per-type transformation aggregates (only if non-zero)
+                        if (totalHtmlBytes > 0)
+                        {
+                            parts.Add($"{FormatFileSize(totalHtmlBytes)} HTML");
+                        }
+                        if (totalMarkdownBytes > 0)
+                        {
+                            parts.Add($"{FormatFileSize(totalMarkdownBytes)} MD");
+                        }
+                        if (totalAttachmentBytes > 0)
+                        {
+                            parts.Add($"{FormatFileSize(totalAttachmentBytes)} ATT");
+                        }
+                        if (totalImageBytes > 0)
+                        {
+                            parts.Add($"{FormatFileSize(totalImageBytes)} IMG");
+                        }
+                        statsText = $" ({string.Join(", ", parts)})";
+                    }
+
+                    // Calculate messages per hour rate based on session progress
+                    var rateText = "";
+                    if (progress.SyncStartTime.HasValue && progress.TotalMessagesSynced > 0)
+                    {
+                        var elapsed = DateTimeOffset.UtcNow - progress.SyncStartTime.Value;
+                        if (elapsed.TotalSeconds > 5) // Only show rate after 5 seconds of data
+                        {
+                            var messagesPerHour = progress.TotalMessagesSynced / elapsed.TotalHours;
+                            rateText = $", {messagesPerHour:F0}/h";
+                        }
+                    }
+
+                    var progressText = $"  Progress: {pageInfo}{progress.ProcessedMessagesInFolder}/{progress.TotalMessagesInFolder}{folderProgressText}{statsText}{rateText}";
+
+                    if (useInPlaceProgress)
+                    {
+                        // Clear previous line content if new text is shorter
+                        var padding = lastProgressLineLength > progressText.Length
+                            ? new string(' ', lastProgressLineLength - progressText.Length)
+                            : "";
+                        console.Output.Write($"\r{progressText}{padding}");
+                        lastProgressLineLength = progressText.Length;
+                        hasActiveProgressLine = true;
+                    }
+                    else
+                    {
+                        console.Output.WriteLine(progressText);
+                    }
                 }
             }
         }, cancellationToken);
+
+        // Ensure we end the in-place progress line before showing results
+        if (useInPlaceProgress && hasActiveProgressLine)
+        {
+            console.Output.WriteLine();
+        }
 
         // Generate navigation indexes if any transformations were enabled
         if ((generateHtml || generateMarkdown) && result.Success && result.MessagesSynced > 0)
@@ -295,5 +405,16 @@ public class SyncCommand : BaseCommand
         }
 
         await console.Output.WriteLineAsync($"Elapsed time: {result.Elapsed:hh\\:mm\\:ss}");
+    }
+
+    /// <summary>
+    /// Formats a file size in bytes to a human-readable string with auto-scaling units.
+    /// </summary>
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
     }
 }

@@ -10,7 +10,7 @@ namespace M365MailMirror.Infrastructure.Transform;
 
 /// <summary>
 /// Service for generating index files (index.html and index.md) for navigating the email archive.
-/// Creates index files at each level of the hierarchy: root, folders, years, and months.
+/// Creates index files at each level of the hierarchy: root, years, and months.
 /// </summary>
 public class IndexGenerationService : IIndexGenerationService
 {
@@ -45,19 +45,19 @@ public class IndexGenerationService : IIndexGenerationService
         {
             _logger.Info("Starting index generation...");
 
-            // Get all distinct folder paths
-            var folderPaths = await _database.GetDistinctFolderPathsAsync(cancellationToken);
-            _logger.Debug("Found {0} distinct folder paths", folderPaths.Count);
+            // Get all distinct year-month combinations
+            var yearMonths = await _database.GetDistinctYearMonthsAsync(cancellationToken);
+            _logger.Debug("Found {0} distinct year-month combinations", yearMonths.Count);
 
-            if (folderPaths.Count == 0)
+            if (yearMonths.Count == 0)
             {
                 _logger.Info("No messages found, skipping index generation");
                 stopwatch.Stop();
                 return IndexGenerationResult.Successful(0, 0, 0, stopwatch.Elapsed);
             }
 
-            // Build the hierarchy structure
-            var hierarchy = await BuildHierarchyAsync(folderPaths, cancellationToken);
+            // Build the hierarchy structure (flat year/month)
+            var hierarchy = await BuildHierarchyAsync(yearMonths, cancellationToken);
 
             // Generate indexes at each level
             if (options.GenerateHtmlIndexes)
@@ -91,10 +91,10 @@ public class IndexGenerationService : IIndexGenerationService
     }
 
     /// <summary>
-    /// Builds the folder hierarchy structure from the list of folder paths.
+    /// Builds the year/month hierarchy structure from distinct year-month combinations.
     /// </summary>
     private async Task<IndexNode> BuildHierarchyAsync(
-        IReadOnlyList<string> folderPaths,
+        IReadOnlyList<(int Year, int Month)> yearMonths,
         CancellationToken cancellationToken)
     {
         var root = new IndexNode
@@ -104,48 +104,6 @@ public class IndexGenerationService : IIndexGenerationService
             NodeType = IndexNodeType.Root
         };
 
-        // Group folder paths by top-level folder
-        var topLevelFolders = new Dictionary<string, List<string>>();
-        foreach (var folderPath in folderPaths)
-        {
-            var parts = folderPath.Split('/', '\\');
-            var topLevel = parts[0];
-
-            if (!topLevelFolders.ContainsKey(topLevel))
-                topLevelFolders[topLevel] = [];
-
-            topLevelFolders[topLevel].Add(folderPath);
-        }
-
-        // Build nodes for each top-level folder
-        foreach (var (topLevelFolder, paths) in topLevelFolders.OrderBy(x => x.Key, StringComparer.Ordinal))
-        {
-            var folderNode = await BuildFolderNodeAsync(topLevelFolder, paths, cancellationToken);
-            root.Children.Add(folderNode);
-            root.TotalMessageCount += folderNode.TotalMessageCount;
-        }
-
-        return root;
-    }
-
-    /// <summary>
-    /// Builds a folder node with its year/month hierarchy.
-    /// </summary>
-    private async Task<IndexNode> BuildFolderNodeAsync(
-        string folderPath,
-        IReadOnlyList<string> allSubPaths,
-        CancellationToken cancellationToken)
-    {
-        var folderNode = new IndexNode
-        {
-            Name = folderPath.Replace('\\', '/').Split('/').Last(),
-            Path = folderPath,
-            NodeType = IndexNodeType.MailFolder
-        };
-
-        // Get year-month combinations for this folder
-        var yearMonths = await _database.GetDistinctYearMonthsForFolderAsync(folderPath, cancellationToken);
-
         // Group by year
         var yearGroups = yearMonths.GroupBy(ym => ym.Year).OrderByDescending(g => g.Key);
 
@@ -154,17 +112,17 @@ public class IndexGenerationService : IIndexGenerationService
             var yearNode = new IndexNode
             {
                 Name = yearGroup.Key.ToString(CultureInfo.InvariantCulture),
-                Path = string.Concat(folderPath, "/", yearGroup.Key.ToString(CultureInfo.InvariantCulture)),
+                Path = yearGroup.Key.ToString(CultureInfo.InvariantCulture),
                 NodeType = IndexNodeType.Year
             };
 
             foreach (var (year, month) in yearGroup.OrderByDescending(ym => ym.Month))
             {
-                var messages = await _database.GetMessagesForIndexAsync(folderPath, year, month, cancellationToken);
+                var messages = await _database.GetMessagesForIndexAsync(year, month, cancellationToken);
                 var monthNode = new IndexNode
                 {
                     Name = BreadcrumbHelper.GetMonthName(month),
-                    Path = string.Concat(folderPath, "/", year.ToString(CultureInfo.InvariantCulture), "/", month.ToString("D2", CultureInfo.InvariantCulture)),
+                    Path = string.Concat(year.ToString(CultureInfo.InvariantCulture), "/", month.ToString("D2", CultureInfo.InvariantCulture)),
                     NodeType = IndexNodeType.Month,
                     TotalMessageCount = messages.Count
                 };
@@ -188,30 +146,11 @@ public class IndexGenerationService : IIndexGenerationService
                 yearNode.TotalMessageCount += monthNode.TotalMessageCount;
             }
 
-            folderNode.Children.Add(yearNode);
-            folderNode.TotalMessageCount += yearNode.TotalMessageCount;
+            root.Children.Add(yearNode);
+            root.TotalMessageCount += yearNode.TotalMessageCount;
         }
 
-        // Handle nested subfolders
-        var folderPathWithSlash = folderPath + "/";
-        var folderPathWithBackslash = folderPath + "\\";
-        var nestedFolders = allSubPaths
-            .Where(p => p.StartsWith(folderPathWithSlash, StringComparison.Ordinal) || p.StartsWith(folderPathWithBackslash, StringComparison.Ordinal))
-            .Where(p => !string.Equals(p, folderPath, StringComparison.Ordinal))
-            .Select(p => p.Substring(folderPath.Length + 1).Split('/', '\\')[0])
-            .Distinct()
-            .ToList();
-
-        foreach (var subfolder in nestedFolders.OrderBy(x => x, StringComparer.Ordinal))
-        {
-            var subfolderPath = string.Concat(folderPath, "/", subfolder);
-            var subfolderPaths = allSubPaths.Where(p => p.StartsWith(subfolderPath, StringComparison.Ordinal)).ToList();
-            var subfolderNode = await BuildFolderNodeAsync(subfolderPath, subfolderPaths, cancellationToken);
-            folderNode.Children.Add(subfolderNode);
-            folderNode.TotalMessageCount += subfolderNode.TotalMessageCount;
-        }
-
-        return folderNode;
+        return root;
     }
 
     /// <summary>
