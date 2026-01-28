@@ -1006,4 +1006,787 @@ function test() { return 1; }
     }
 
     #endregion
+
+    #region Bold Text with Nested HTML Tags Tests
+
+    [Theory]
+    [InlineData("<b><font> DC</font></b>", "**DC**")]
+    [InlineData("<b><span> WA 6919</span></b>", "**WA 6919**")]
+    [InlineData("<b><font size=\"1\"><span style=\"color:navy\"> Leading space</span></font></b>", "**Leading space**")]
+    public void ConvertHtmlToMarkdown_WithBoldContainingNestedTagsAndLeadingSpace_TrimsSpaceCorrectly(string input, string expected)
+    {
+        // Bug: When bold tags contain nested HTML tags (font, span) with leading whitespace,
+        // the Trim() only affects the outer string which starts with '<', not the inner text.
+        // Result: "** DC**" instead of "**DC**" - invalid Markdown bold syntax.
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOutlookSignaturePattern_ProducesValidBold()
+    {
+        // Exact pattern from the problematic email signature
+        // Multiple adjacent bold tags with nested font/span containing leading spaces
+        var input = @"<b><font size=""1"" face=""Arial""><span style=""font-size:7.5pt;font-family:Arial;color:navy"">JOONDALUP</span></font></b><b><font size=""1"" face=""Arial""><span style=""font-size:7.5pt;font-family:Arial;color:navy"">
+ DC</span></font></b><b><font size=""1"" face=""Arial""><span style=""font-size:7.5pt;font-family:Arial;color:navy""> WA 6919</span></font></b>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should NOT produce "** DC**" - that's invalid Markdown (space after opening **)
+        // Use regex to check for invalid patterns: ** followed by space then non-**
+        result.Should().NotMatchRegex(@"\*\* [^*]");
+        // Should contain properly formatted bold text
+        result.Should().Contain("**JOONDALUP**");
+        result.Should().Contain("**DC**");
+        result.Should().Contain("**WA 6919**");
+    }
+
+    #endregion
+
+    #region Paragraph Whitespace Normalization Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithParagraphContainingHardLineBreaks_CollapsesToSingleParagraph()
+    {
+        // Bug: HTML source has hard line breaks for readability (not <br> tags),
+        // which are being preserved as newlines in the output instead of collapsed to spaces.
+        var input = @"<p>This e-mail and any attachments to it (the ""Communication"") is confidential and is for the use only of the intended recipient. The Communication
+ may contain copyright material of Company Pty Ltd ABN 83 095 223 620, or of third parties. If you are not the intended recipient of the Communication, please notify the sender immediately by return e-mail, delete the Communication, and do not read,
+ copy, print, retransmit, store or act in reliance on the Communication.</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The output should be a single paragraph without line breaks
+        result.Should().NotContain("\n");
+        // Should contain all the text flowing together
+        result.Should().Contain("The Communication may contain");
+        result.Should().Contain("please notify the sender");
+    }
+
+    [Theory]
+    [InlineData("<p>Line1\n Line2</p>", "Line1 Line2")]
+    [InlineData("<p>Word1\r\n Word2</p>", "Word1 Word2")]
+    [InlineData("<p>Text\n  with\n   indented\n    lines</p>", "Text with indented lines")]
+    public void ConvertHtmlToMarkdown_WithLineBreaksInParagraphs_NormalizesToSpaces(string input, string expected)
+    {
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithBrTags_PreservesLineBreaks()
+    {
+        // <br> tags should produce actual line breaks, unlike source code formatting
+        var input = @"<p>Line 1<br>Line 2<br/>Line 3</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // <br> tags should be converted to actual line breaks
+        result.Should().Contain("Line 1");
+        result.Should().Contain("Line 2");
+        result.Should().Contain("Line 3");
+    }
+
+    #endregion
+
+    #region Table Separation Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTableAfterParagraph_ShouldHaveBlankLineBefore()
+    {
+        // Tables need blank lines before them to render properly in markdown
+        var input = @"<p>Some text before the table</p>
+<table>
+<tr><td>Header 1</td><td>Header 2</td></tr>
+<tr><td>Data 1</td><td>Data 2</td></tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The table should be on a separate line from the preceding text
+        // Split by lines and check that "Some text" and "|" are on different lines
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var textLine = lines.FirstOrDefault(l => l.Contains("Some text"));
+        var tableLine = lines.FirstOrDefault(l => l.StartsWith('|'));
+
+        textLine.Should().NotBeNull();
+        tableLine.Should().NotBeNull();
+        // Text line should NOT contain the table pipe character
+        textLine.Should().NotContain("|");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTableBetweenParagraphs_ShouldHaveBlankLinesAroundIt()
+    {
+        // Tables need blank lines before and after them to render properly in markdown
+        var input = @"<p>Text before</p>
+<table>
+<tr><td>Cell</td></tr>
+</table>
+<p>Text after</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The table should be separated from surrounding text
+        result.Should().Contain("Text before");
+        result.Should().Contain("| Cell |");
+        result.Should().Contain("Text after");
+
+        // None of these should be on the same line
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var beforeLine = lines.FirstOrDefault(l => l.Contains("Text before"));
+        var afterLine = lines.FirstOrDefault(l => l.Contains("Text after"));
+
+        beforeLine.Should().NotContain("|");
+        afterLine.Should().NotContain("|");
+    }
+
+    #endregion
+
+    #region Paragraph Tag Conversion Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithParagraphTags_ShouldPreserveParagraphBreaks()
+    {
+        // Bug: <p> tags are being stripped without adding paragraph breaks,
+        // causing all content to collapse into one continuous blob of text.
+        // Example: An email with multiple paragraphs separated by <p> tags
+        // should maintain paragraph separation in the markdown output.
+        var input = @"<p>Hi John,</p>
+<p>I am writing to follow up on our meeting.</p>
+<p><b>Action Items:</b></p>
+<p>Please review the attached document.</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Each paragraph should be on a separate line (separated by blank lines in markdown)
+        // The output should NOT be one continuous blob of text
+        result.Should().Contain("Hi John,");
+        result.Should().Contain("I am writing to follow up");
+        result.Should().Contain("**Action Items:**");
+        result.Should().Contain("Please review");
+
+        // Key assertion: paragraphs should be separated by newlines, not run together
+        // If they're all on one line, this would fail
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.Length.Should().BeGreaterThan(1, "Multiple paragraphs should produce multiple lines, not one blob");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithClosingParagraphTags_ShouldAddNewlines()
+    {
+        // </p> marks the end of a paragraph and should result in a line break
+        var input = @"<p>First paragraph.</p><p>Second paragraph.</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The two paragraphs should be on separate lines
+        result.Should().Contain("First paragraph.");
+        result.Should().Contain("Second paragraph.");
+
+        // They should NOT be on the same line
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var firstLine = lines.FirstOrDefault(l => l.Contains("First paragraph."));
+        firstLine.Should().NotBeNull();
+        firstLine.Should().NotContain("Second paragraph.");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithDivTags_ShouldPreserveBlockBreaks()
+    {
+        // <div> is a block-level element that should also produce line breaks
+        var input = @"<div>Block one content.</div><div>Block two content.</div>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The two divs should be on separate lines
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.Length.Should().BeGreaterThan(1, "Multiple divs should produce multiple lines");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithEmailStructure_ShouldPreserveSections()
+    {
+        // Simulates the actual structure from the problem email
+        var input = @"<p>Hi there,</p>
+<p>We have a few queries:</p>
+<p><b>Section One:</b></p>
+<p>Please provide documents for the following accounts:</p>
+<p>Account A<br>Account B<br>Account C</p>
+<p><b>Section Two:</b></p>
+<p>Please confirm the following details.</p>
+<p>Thank you!</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Verify structure is preserved
+        result.Should().Contain("**Section One:**");
+        result.Should().Contain("**Section Two:**");
+
+        // Key: The bold sections should NOT be on the same line as surrounding content
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        // Find the lines with section headers
+        var sectionOneLine = lines.FirstOrDefault(l => l.Contains("**Section One:**"));
+        var sectionTwoLine = lines.FirstOrDefault(l => l.Contains("**Section Two:**"));
+
+        sectionOneLine.Should().NotBeNull();
+        sectionTwoLine.Should().NotBeNull();
+
+        // Section headers should be separate from the content that follows
+        sectionOneLine.Should().NotContain("Please provide documents");
+        sectionTwoLine.Should().NotContain("Please confirm");
+    }
+
+    #endregion
+
+    #region Standard HTML List Conversion Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOrderedList_ConvertsToMarkdownNumberedList()
+    {
+        // Standard HTML ordered list that should be converted to markdown numbered list
+        // Bug: Currently lists are being collapsed into a single line of text
+        var input = @"<ol>
+<li>First item</li>
+<li>Second item</li>
+<li>Third item</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should produce numbered list with each item on its own line
+        result.Should().Contain("1. First item");
+        result.Should().Contain("2. Second item");
+        result.Should().Contain("3. Third item");
+
+        // Items should be on separate lines
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.Length.Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithUnorderedList_ConvertsToMarkdownBulletList()
+    {
+        // Standard HTML unordered list that should be converted to markdown bullet list
+        var input = @"<ul>
+<li>Apple</li>
+<li>Banana</li>
+<li>Cherry</li>
+</ul>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should produce bullet list with each item on its own line
+        result.Should().Contain("- Apple");
+        result.Should().Contain("- Banana");
+        result.Should().Contain("- Cherry");
+
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.Length.Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOrderedListWithStartAttribute_RespectsStartNumber()
+    {
+        // Outlook often uses start="2" to continue numbering from previous list
+        var input = @"<ol start=""2"">
+<li>Second item</li>
+<li>Third item</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("2. Second item");
+        result.Should().Contain("3. Third item");
+        // Should NOT start with 1
+        result.Should().NotContain("1. Second item");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithListFollowingBoldHeading_PreservesBothStructures()
+    {
+        // Common email pattern: bold heading followed by a list
+        var input = @"<p><b>Apolon's Family Trust:</b></p>
+<ol>
+<li>Please provide a copy of the bank statements.</li>
+<li>Please review the attached report.</li>
+<li>Please confirm if you still have the account.</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Bold heading should be preserved
+        result.Should().Contain("**Apolon's Family Trust:**");
+
+        // List items should be numbered
+        result.Should().Contain("1. Please provide a copy of the bank statements.");
+        result.Should().Contain("2. Please review the attached report.");
+        result.Should().Contain("3. Please confirm if you still have the account.");
+
+        // Items should be on separate lines
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var line1 = lines.FirstOrDefault(l => l.Contains("1. Please provide"));
+        var line2 = lines.FirstOrDefault(l => l.Contains("2. Please review"));
+        line1.Should().NotBeNull();
+        line2.Should().NotBeNull();
+        line1.Should().NotBe(line2);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithNestedLists_HandlesGracefully()
+    {
+        // Nested list structure - common in Outlook emails
+        var input = @"<ol>
+<li>First main item</li>
+</ol>
+<ul>
+<li>Sub-item A</li>
+<li>Sub-item B</li>
+</ul>
+<ol start=""2"">
+<li>Second main item</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Main items should be numbered correctly
+        result.Should().Contain("1. First main item");
+        result.Should().Contain("2. Second main item");
+
+        // Sub-items should be bullets
+        result.Should().Contain("- Sub-item A");
+        result.Should().Contain("- Sub-item B");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithListContainingStyledContent_PreservesContent()
+    {
+        // Outlook wraps list content in span/font tags
+        var input = @"<ol>
+<li class=""MsoNormal"" style=""color:#201747""><span style=""font-family:Source Sans Pro"">Please confirm the number of kilometres travelled.</span></li>
+<li class=""MsoNormal"" style=""color:#201747""><span style=""font-family:Source Sans Pro"">Please confirm if you incurred any donations.</span></li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("1. Please confirm the number of kilometres travelled.");
+        result.Should().Contain("2. Please confirm if you incurred any donations.");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleSeparateLists_ConvertsEachIndependently()
+    {
+        // Multiple separate lists in an email (like different sections)
+        var input = @"<p><b>Section One:</b></p>
+<ol>
+<li>Task A</li>
+<li>Task B</li>
+</ol>
+<p><b>Section Two:</b></p>
+<ol>
+<li>Task C</li>
+<li>Task D</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Both lists should start numbering from 1
+        // First we check that all items exist
+        result.Should().Contain("**Section One:**");
+        result.Should().Contain("1. Task A");
+        result.Should().Contain("2. Task B");
+        result.Should().Contain("**Section Two:**");
+        result.Should().Contain("1. Task C");
+        result.Should().Contain("2. Task D");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithListItemContainingMultipleSentences_PreservesAllContent()
+    {
+        // List items often contain multiple sentences
+        var input = @"<ol>
+<li>Please provide a copy of the bank statements showing the closing balance at 30 June 2024. We need this for the financial year reconciliation.</li>
+<li>Please review the attached report. If you have received the payments, let us know so we can adjust.</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("1. Please provide a copy of the bank statements showing the closing balance at 30 June 2024. We need this for the financial year reconciliation.");
+        result.Should().Contain("2. Please review the attached report. If you have received the payments, let us know so we can adjust.");
+    }
+
+    #endregion
+
+    #region Underline Tag Conversion Tests
+
+    [Theory]
+    [InlineData("<u>underlined text</u>", "<u>underlined text</u>")]
+    [InlineData("<U>UPPERCASE TAG</U>", "<u>UPPERCASE TAG</u>")]
+    [InlineData("<u>Unit 7/45 Central Walk, Joondalup WA 6027:</u>", "<u>Unit 7/45 Central Walk, Joondalup WA 6027:</u>")]
+    public void ConvertHtmlToMarkdown_WithUnderlineTag_PreservesUnderlineAsHtml(string input, string expected)
+    {
+        // Markdown doesn't have native underline syntax, so we preserve <u> tags as inline HTML
+        // which is valid in GitHub-flavored markdown and most markdown renderers
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithUnderlineInParagraph_PreservesUnderlineInContext()
+    {
+        // From the actual email - underlined property address as a section header
+        var input = @"<p style=""text-indent:18.0pt""><u><span style=""font-family:Source Sans Pro,sans-serif;color:#201747"">Unit 7/45 Central Walk, Joondalup WA 6027:</span></u></p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The underlined text should be preserved
+        result.Should().Contain("<u>Unit 7/45 Central Walk, Joondalup WA 6027:</u>");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithUnderlineContainingNestedTags_PreservesUnderline()
+    {
+        // Underline tag wrapping styled span (common in Outlook)
+        var input = @"<u><span style=""font-family:Arial"">45 Central Walk, Joondalup WA 6027:</span></u>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Should preserve underline around the text content
+        result.Should().Be("<u>45 Central Walk, Joondalup WA 6027:</u>");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleUnderlinedSections_PreservesAll()
+    {
+        var input = @"<p><b>Section A:</b></p>
+<p><u>Property One:</u></p>
+<p>Details here.</p>
+<p><u>Property Two:</u></p>
+<p>More details.</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("<u>Property One:</u>");
+        result.Should().Contain("<u>Property Two:</u>");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithEmptyUnderlineTag_RemovesIt()
+    {
+        // Empty underline tags should be removed like empty bold tags
+        var input = @"<u></u>Some text";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("<u></u>");
+        result.Should().Contain("Some text");
+    }
+
+    #endregion
+
+    #region Nested List Indentation Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithBulletListUnderNumberedListItem_IndentsBulletList()
+    {
+        // From the actual email: A numbered list item followed by a nested bullet list
+        // The bullet list items should be indented under the numbered list
+        var input = @"<ol>
+<li>Please provide bank statements:</li>
+</ol>
+<ul style=""margin-left:18pt"">
+<li>ANZ #6773</li>
+<li>ANZ Visa #4176</li>
+</ul>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The bullet list items should be indented to show they're under the numbered list
+        // Markdown uses 2-4 spaces for nesting
+        result.Should().Contain("1. Please provide bank statements:");
+        result.Should().Contain("    - ANZ #6773");
+        result.Should().Contain("    - ANZ Visa #4176");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithNestedBulletListInHtml_PreservesContent()
+    {
+        // True nested list structure (ul inside li) - content is preserved but nesting structure is flattened
+        // Note: This is a known limitation. Outlook emails use sibling lists with margin-left instead
+        // of true nesting, which IS properly indented. True HTML nesting (ul inside li) would require
+        // complex recursive processing.
+        var input = @"<ol>
+<li>Main item with sub-items:
+    <ul>
+        <li>Sub-item A</li>
+        <li>Sub-item B</li>
+    </ul>
+</li>
+<li>Second main item</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // All content should be present (nesting structure is flattened)
+        result.Should().Contain("Main item with sub-items");
+        result.Should().Contain("Sub-item A");
+        result.Should().Contain("Sub-item B");
+        result.Should().Contain("Second main item");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithOutlookStyleNestedListWithMarginLeft_IndentsItems()
+    {
+        // Outlook often uses margin-left CSS to indent sublists instead of proper nesting
+        // This is the pattern from the actual email
+        var input = @"<ol>
+<li>Please provide a copy of all Term Deposit account statements. We believe there are the following accounts:</li>
+</ol>
+<ul style=""margin-top:0cm"" type=""disc"">
+<li style=""margin-left:21.25pt"">Term Deposit 2009</li>
+<li style=""margin-left:21.25pt"">Term Deposit 7142</li>
+<li style=""margin-left:21.25pt"">Term Deposit 8982</li>
+<li style=""margin-left:21.25pt"">Term Deposit 5169</li>
+</ul>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The bullet items should be indented to show they belong under the numbered item
+        result.Should().Contain("1. Please provide a copy of all Term Deposit account statements");
+        result.Should().Contain("    - Term Deposit 2009");
+        result.Should().Contain("    - Term Deposit 7142");
+        result.Should().Contain("    - Term Deposit 8982");
+        result.Should().Contain("    - Term Deposit 5169");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleSectionsEachWithNestedLists_IndentsEachCorrectly()
+    {
+        // Email with multiple sections, each having numbered items with sub-bullets
+        var input = @"<p><b>Section One:</b></p>
+<ol>
+<li>Get these bank statements:</li>
+</ol>
+<ul style=""margin-left:18pt"">
+<li>Account A</li>
+<li>Account B</li>
+</ul>
+<p><b>Section Two:</b></p>
+<ol>
+<li>Get these documents:</li>
+</ol>
+<ul style=""margin-left:18pt"">
+<li>Document X</li>
+<li>Document Y</li>
+</ul>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Both sections should have properly indented sub-lists
+        result.Should().Contain("**Section One:**");
+        result.Should().Contain("1. Get these bank statements:");
+        result.Should().Contain("    - Account A");
+        result.Should().Contain("    - Account B");
+
+        result.Should().Contain("**Section Two:**");
+        result.Should().Contain("1. Get these documents:");
+        result.Should().Contain("    - Document X");
+        result.Should().Contain("    - Document Y");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithDeeplyNestedLists_PreservesContent()
+    {
+        // Three levels of true HTML nesting - content is preserved but structure is flattened
+        // Note: This is a known limitation. Outlook emails use sibling lists with margin-left/CSS
+        // instead of true nesting, which IS properly indented.
+        var input = @"<ol>
+<li>Main item
+    <ul>
+        <li>Sub-item
+            <ul>
+                <li>Sub-sub-item A</li>
+                <li>Sub-sub-item B</li>
+            </ul>
+        </li>
+    </ul>
+</li>
+</ol>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // All content should be present (nesting structure is flattened)
+        result.Should().Contain("Main item");
+        result.Should().Contain("Sub-item");
+        result.Should().Contain("Sub-sub-item A");
+        result.Should().Contain("Sub-sub-item B");
+    }
+
+    #endregion
+
+    #region Pre Tag Conversion Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTag_ConvertsToFencedCodeBlock()
+    {
+        var input = "<pre>console.log('hello');</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().Contain("```");
+        result.Should().Contain("console.log('hello');");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingJson_DetectsJsonLanguage()
+    {
+        var input = @"<pre>{""message"":""error"",""code"":500}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```json");
+        result.Should().Contain(@"{""message"":""error"",""code"":500}");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingCssSelectors_DetectsCssLanguage()
+    {
+        var input = "<pre>div.container > span.text { color: red; }</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```css");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingStackTrace_DetectsJavaScriptLanguage()
+    {
+        var input = @"<pre>Error: Request failed
+    at fetchData (app.js:42:15)
+    at main (index.js:10:5)</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```javascript");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingHtmlEntities_DecodesEntities()
+    {
+        var input = @"<pre>{&quot;key&quot;:&quot;value&quot;,&quot;count&quot;:5}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        // HTML entities should be decoded inside the code block
+        result.Should().Contain(@"{""key"":""value"",""count"":5}");
+        result.Should().NotContain("&quot;");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagWithAttributes_ConvertsToCodeBlock()
+    {
+        var input = @"<pre style=""background:#f4f4f4;font-size:12px"">code here</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().Contain("```");
+        result.Should().Contain("code here");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultiplePreTags_ConvertsEach()
+    {
+        var input = @"<p>First:</p><pre>block1</pre><p>Second:</p><pre>block2</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().Contain("block1");
+        result.Should().Contain("block2");
+        // Should have two code blocks
+        var fenceCount = result.Split("```").Length - 1;
+        fenceCount.Should().BeGreaterThanOrEqualTo(4); // Opening and closing for each
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingPlainText_NoLanguageHint()
+    {
+        var input = "<pre>Just some plain text content</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        // Should have code fence but no language (or empty language)
+        result.Should().Contain("```\n");
+        result.Should().Contain("Just some plain text content");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingHtml_DetectsHtmlLanguage()
+    {
+        var input = @"<pre>&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;body&gt;content&lt;/body&gt;&lt;/html&gt;</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```html");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingXml_DetectsXmlLanguage()
+    {
+        var input = @"<pre>&lt;?xml version=""1.0""?&gt;&lt;root&gt;data&lt;/root&gt;</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```xml");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingCSharp_DetectsCSharpLanguage()
+    {
+        var input = @"<pre>using System;
+namespace MyApp {
+    public class Program { }
+}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```csharp");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingJava_DetectsJavaLanguage()
+    {
+        var input = @"<pre>import java.util.List;
+public class Main {
+    System.out.println(""Hello"");
+}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```java");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingPython_DetectsPythonLanguage()
+    {
+        var input = @"<pre>def hello():
+    print('Hello World')
+</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```python");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingTypeScript_DetectsTypeScriptLanguage()
+    {
+        var input = @"<pre>interface User {
+    name: string;
+    age: number;
+}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```typescript");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingCpp_DetectsCppLanguage()
+    {
+        var input = @"<pre>#include &lt;iostream&gt;
+int main() {
+    std::cout &lt;&lt; ""Hello"";
+}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```cpp");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithPreTagContainingC_DetectsCLanguage()
+    {
+        var input = @"<pre>#include &lt;stdio.h&gt;
+int main() {
+    printf(""Hello"");
+}</pre>";
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+        result.Should().StartWith("```c\n");
+    }
+
+    #endregion
 }

@@ -50,6 +50,15 @@ public static class MarkdownCleaningHelper
         RegexOptions.Compiled,
         RegexTimeout);
 
+    // Pattern to collapse single line breaks (with optional leading whitespace) into spaces
+    // This handles HTML source code formatting where long lines are wrapped for readability
+    // but the wrapping is not semantic (not <br> tags)
+    // Handles both Unix (\n) and Windows (\r\n) style line endings
+    private static readonly Regex InlineNewlinePattern = new(
+        @"(?<!\r?\n)\r?\n[ \t]*(?!\r?\n)",
+        RegexOptions.Compiled,
+        RegexTimeout);
+
     // Outlook link patterns - use [^\s<]+ (non-whitespace, non-<) instead of \S+?
     // to prevent catastrophic backtracking while still matching full link text
     private static readonly Regex OutlookHttpLinkPattern = new(
@@ -70,6 +79,12 @@ public static class MarkdownCleaningHelper
 
     private static readonly Regex ItalicTagPattern = new(
         @"<(i|em)>(.*?)</\1>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Underline tag pattern - preserved as inline HTML since Markdown has no native underline
+    private static readonly Regex UnderlineTagPattern = new(
+        @"<u>(.*?)</u>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -94,6 +109,24 @@ public static class MarkdownCleaningHelper
     // HR tag pattern - horizontal rule tags with optional attributes and self-closing
     private static readonly Regex HrTagPattern = new(
         @"<hr[^>]*/?>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // BR tag pattern - line break tags with optional self-closing
+    private static readonly Regex BrTagPattern = new(
+        @"<br\s*/?>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Closing paragraph tag - marks end of paragraph block
+    private static readonly Regex ClosingParagraphTagPattern = new(
+        @"</p\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Closing div tag - marks end of div block
+    private static readonly Regex ClosingDivTagPattern = new(
+        @"</div\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -123,6 +156,50 @@ public static class MarkdownCleaningHelper
     private static readonly Regex HtmlCommentPattern = new(
         @"<!--[\s\S]*?-->",
         RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to match preformatted text blocks: <pre>...</pre>
+    private static readonly Regex PreTagPattern = new(
+        @"<pre[^>]*>([\s\S]*?)</pre>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to match ordered lists: <ol>...</ol>
+    private static readonly Regex OrderedListPattern = new(
+        @"<ol[^>]*>(.*?)</ol>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to match unordered lists: <ul>...</ul>
+    private static readonly Regex UnorderedListPattern = new(
+        @"<ul[^>]*>(.*?)</ul>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to extract list items: <li>...</li>
+    private static readonly Regex ListItemPattern = new(
+        @"<li[^>]*>(.*?)</li>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to detect margin-left in styles (CSS indentation indicator)
+    private static readonly Regex MarginLeftPattern = new(
+        @"margin-left\s*:\s*(\d+(?:\.\d+)?)\s*(pt|px|em|cm|mm|in)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to detect ul/ol immediately following another list (Outlook continuation pattern)
+    // Captures: preceding </ol> or </ul> (possibly multiple closing tags), optional whitespace, and the following <ul>
+    // Outlook often has nested empty <ol> tags that close before the <ul>, e.g. </ol></ol></ol></ol><ul...>
+    private static readonly Regex ListContinuationPattern = new(
+        @"(?:</ol>\s*)+(<ul[^>]*>)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        RegexTimeout);
+
+    // Pattern to extract start attribute from <ol start="N">
+    private static readonly Regex OlStartAttributePattern = new(
+        @"<ol[^>]*\bstart\s*=\s*[""']?(\d+)[""']?[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
         RegexTimeout);
 
     /// <summary>
@@ -218,6 +295,17 @@ public static class MarkdownCleaningHelper
             result = ConditionalCommentPattern.Replace(result, "");
             result = HtmlCommentPattern.Replace(result, "");
 
+            // Convert pre tags to fenced code blocks BEFORE whitespace normalization
+            // This preserves the preformatted structure of code content
+            result = ConvertPreTagsToCodeFences(result);
+
+            // Collapse single line breaks with trailing whitespace into spaces BEFORE semantic conversions
+            // This handles HTML source code formatting (line wraps for readability, not <br> tags)
+            // Must happen before table/list conversion so markdown output newlines are preserved
+            result = InlineNewlinePattern.Replace(result, " ");
+            // Collapse multiple consecutive spaces into single space
+            result = Regex.Replace(result, @"[ \t]+", " ", RegexOptions.None, RegexTimeout);
+
             // Convert semantic HTML to Markdown BEFORE stripping tags
             result = ApplySemanticConversions(result);
 
@@ -234,6 +322,15 @@ public static class MarkdownCleaningHelper
 
             // Decode HTML entities
             result = System.Net.WebUtility.HtmlDecode(result);
+
+            // Restore underline placeholders to actual <u> tags
+            // These were inserted during ApplySemanticConversions to survive HTML stripping
+            result = result.Replace("{{U_START}}", "<u>");
+            result = result.Replace("{{U_END}}", "</u>");
+
+            // Restore code fence placeholders to actual markdown code fences
+            // These were inserted during ConvertPreTagsToCodeFences to survive whitespace normalization
+            result = RestoreCodeFencePlaceholders(result);
 
             // Normalize excessive whitespace (more than 2 consecutive newlines)
             result = ExcessiveNewlinesPattern.Replace(result, "\n\n");
@@ -254,9 +351,15 @@ public static class MarkdownCleaningHelper
     {
         string result = html;
 
+        // Note: Pre tag conversion moved to ConvertHtmlToMarkdown (before whitespace normalization)
+
         // Convert HR tags to Markdown separator BEFORE stripping other tags
         // <hr>, <hr/>, <hr />, <hr tabindex="-1" align="center" ...>
         result = HrTagPattern.Replace(result, "\n\n---\n\n");
+
+        // Convert BR tags to newlines BEFORE stripping other tags
+        // <br>, <br/>, <br />
+        result = BrTagPattern.Replace(result, "\n");
 
         // Strip Office XML tags (like <o:p>, <st1:date>) BEFORE bold conversion
         // These often wrap empty content inside bold tags, causing extra asterisks
@@ -267,6 +370,8 @@ public static class MarkdownCleaningHelper
         result = BoldTagPattern.Replace(result, match =>
         {
             var content = match.Groups[2].Value;
+            // Strip inner HTML tags first (font, span, etc.) so whitespace normalization works on text
+            content = HtmlTagPattern.Replace(content, "");
             // Normalize internal whitespace (collapse multiple spaces/newlines to single space)
             content = Regex.Replace(content, @"\s+", " ", RegexOptions.None, RegexTimeout).Trim();
             // Skip empty bold tags
@@ -281,6 +386,22 @@ public static class MarkdownCleaningHelper
         // Convert italic: <i>text</i> or <em>text</em> → *text*
         result = ItalicTagPattern.Replace(result, "*$2*");
 
+        // Convert underline: <u>text</u> → placeholder that survives HTML stripping
+        // Use {{U}} placeholders since Markdown doesn't have native underline syntax
+        // These will be converted back to <u> tags after HTML stripping
+        result = UnderlineTagPattern.Replace(result, match =>
+        {
+            var content = match.Groups[1].Value;
+            // Strip inner HTML tags first (font, span, etc.) so we get clean text
+            content = HtmlTagPattern.Replace(content, "");
+            // Normalize internal whitespace (collapse multiple spaces/newlines to single space)
+            content = Regex.Replace(content, @"\s+", " ", RegexOptions.None, RegexTimeout).Trim();
+            // Skip empty underline tags
+            if (string.IsNullOrWhiteSpace(content))
+                return "";
+            return $"{{{{U_START}}}}{content}{{{{U_END}}}}";
+        });
+
         // Convert tables to markdown format (regular tables)
         result = ConvertTablesToMarkdown(result);
 
@@ -288,9 +409,22 @@ public static class MarkdownCleaningHelper
         // This allows ProcessListCellContent to detect image-only paragraphs
         result = ConvertOutlookTableListsToMarkdown(result);
 
+        // Convert standard HTML lists (<ol><li>, <ul><li>) to Markdown
+        // Must happen after Outlook table lists to avoid processing placeholder <ol> tags
+        // First: Mark <ul> elements that follow <ol> (Outlook continuation pattern) for indentation
+        result = MarkListContinuationsForIndentation(result);
+        result = ConvertOrderedListsToMarkdown(result);
+        result = ConvertUnorderedListsToMarkdown(result);
+
         // Convert remaining images: <img src="cid:..."> → ![image](cid:...)
         // This handles images not inside Outlook table lists
         result = ImageTagPattern.Replace(result, "![image]($1)");
+
+        // Convert closing block-level tags to paragraph breaks AFTER table/list conversion
+        // (Table/list conversion relies on <p> structure for image-only paragraph detection)
+        // </p> and </div> mark the end of content blocks and should produce paragraph breaks
+        result = ClosingParagraphTagPattern.Replace(result, "\n\n");
+        result = ClosingDivTagPattern.Replace(result, "\n\n");
 
         return result;
     }
@@ -355,7 +489,8 @@ public static class MarkdownCleaningHelper
 
             if (markdownRows.Count == 0) return match.Value;
 
-            return string.Join("\n", markdownRows);
+            // Add blank lines before and after the table for proper markdown separation
+            return "\n\n" + string.Join("\n", markdownRows) + "\n\n";
         });
     }
 
@@ -438,8 +573,186 @@ public static class MarkdownCleaningHelper
 
             if (listItems.Count == 0) return match.Value;
 
-            return string.Join("\n", listItems);
+            // Add blank lines before and after the list for proper markdown separation
+            return "\n\n" + string.Join("\n", listItems) + "\n\n";
         });
+    }
+
+    /// <summary>
+    /// Converts standard HTML ordered lists (<ol><li>...</ol>) to Markdown numbered lists.
+    /// </summary>
+    private static string ConvertOrderedListsToMarkdown(string html)
+    {
+        return OrderedListPattern.Replace(html, match =>
+        {
+            var listContent = match.Groups[1].Value;
+            var fullMatch = match.Value;
+
+            // Check if this list is inside a table (Outlook-style list) - skip if so
+            // These are handled by ConvertOutlookTableListsToMarkdown
+            // We detect this by checking if the <ol> has only <li>&nbsp;</li> content (number placeholder)
+            var items = ListItemPattern.Matches(listContent);
+            if (items.Count == 0) return fullMatch;
+
+            // Check for Outlook-style placeholder lists (single item with only whitespace/nbsp)
+            if (items.Count == 1)
+            {
+                var itemContent = items[0].Groups[1].Value;
+                var cleanedContent = HtmlTagPattern.Replace(itemContent, "").Trim();
+                cleanedContent = System.Net.WebUtility.HtmlDecode(cleanedContent).Trim();
+                if (string.IsNullOrWhiteSpace(cleanedContent))
+                {
+                    // This is a placeholder <ol><li>&nbsp;</li></ol> used for numbering in tables
+                    return fullMatch;
+                }
+            }
+
+            // Extract start number if present
+            int startNumber = 1;
+            var startMatch = OlStartAttributePattern.Match(fullMatch);
+            if (startMatch.Success)
+            {
+                int.TryParse(startMatch.Groups[1].Value, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out startNumber);
+            }
+
+            var markdownItems = new List<string>();
+            int currentNumber = startNumber;
+
+            foreach (Match item in items)
+            {
+                var itemContent = item.Groups[1].Value;
+                var cleanedItem = CleanListItemContent(itemContent);
+                if (!string.IsNullOrWhiteSpace(cleanedItem))
+                {
+                    markdownItems.Add($"{currentNumber}. {cleanedItem}");
+                    currentNumber++;
+                }
+            }
+
+            if (markdownItems.Count == 0) return fullMatch;
+
+            return "\n\n" + string.Join("\n", markdownItems) + "\n\n";
+        });
+    }
+
+    /// <summary>
+    /// Marks unordered lists that follow ordered lists (Outlook continuation pattern) for indentation.
+    /// Also handles true nesting (<ul> inside <li>) by recursively processing with depth.
+    /// </summary>
+    private static string MarkListContinuationsForIndentation(string html)
+    {
+        // Mark <ul> that follows </ol> as needing indentation (Outlook continuation)
+        // Replace the <ul> opening tag with a marked version
+        // The match.Value includes all closing </ol> tags before the <ul>
+        return ListContinuationPattern.Replace(html, match =>
+        {
+            var fullMatch = match.Value;
+            var ulTag = match.Groups[1].Value;
+            // Add a marker attribute to indicate this list should be indented
+            // Insert the marker just before the closing >
+            var insertPos = ulTag.Length - 1;
+            var markedUl = ulTag.Insert(insertPos, " data-indent=\"1\"");
+            // Preserve all the closing </ol> tags that precede the <ul>
+            var closingOlTags = fullMatch.Substring(0, fullMatch.Length - ulTag.Length);
+            return closingOlTags + markedUl;
+        });
+    }
+
+    /// <summary>
+    /// Converts standard HTML unordered lists (<ul><li>...</ul>) to Markdown bullet lists.
+    /// Supports indentation based on margin-left CSS or continuation markers.
+    /// </summary>
+    private static string ConvertUnorderedListsToMarkdown(string html)
+    {
+        // Pattern that captures the ul tag attributes for indentation detection
+        var ulWithAttrsPattern = new Regex(
+            @"<ul([^>]*)>(.*?)</ul>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        return ulWithAttrsPattern.Replace(html, match =>
+        {
+            var ulAttributes = match.Groups[1].Value;
+            var listContent = match.Groups[2].Value;
+            var fullMatch = match.Value;
+
+            var items = ListItemPattern.Matches(listContent);
+            if (items.Count == 0) return fullMatch;
+
+            // Determine indentation level based on:
+            // 1. data-indent marker (from MarkListContinuationsForIndentation)
+            // 2. margin-left CSS on the <ul> element
+            int indentLevel = 0;
+
+            if (ulAttributes.Contains("data-indent=", StringComparison.OrdinalIgnoreCase))
+            {
+                // Extract indent level from marker
+                var indentMatch = Regex.Match(ulAttributes, @"data-indent\s*=\s*""?(\d+)""?",
+                    RegexOptions.IgnoreCase, RegexTimeout);
+                if (indentMatch.Success)
+                {
+                    indentLevel = int.Parse(indentMatch.Groups[1].Value,
+                        System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+            else if (MarginLeftPattern.IsMatch(ulAttributes))
+            {
+                // margin-left on <ul> indicates indentation
+                indentLevel = 1;
+            }
+
+            // Also check first item's margin-left (Outlook often puts it on <li> instead)
+            if (indentLevel == 0 && items.Count > 0)
+            {
+                var firstItemMatch = items[0];
+                var liTag = fullMatch.Substring(
+                    fullMatch.IndexOf("<li", StringComparison.OrdinalIgnoreCase),
+                    Math.Min(100, fullMatch.Length - fullMatch.IndexOf("<li", StringComparison.OrdinalIgnoreCase)));
+                if (MarginLeftPattern.IsMatch(liTag))
+                {
+                    indentLevel = 1;
+                }
+            }
+
+            var indent = new string(' ', indentLevel * 4);
+            var markdownItems = new List<string>();
+
+            foreach (Match item in items)
+            {
+                var itemContent = item.Groups[1].Value;
+                var cleanedItem = CleanListItemContent(itemContent);
+                if (!string.IsNullOrWhiteSpace(cleanedItem))
+                {
+                    markdownItems.Add($"{indent}- {cleanedItem}");
+                }
+            }
+
+            if (markdownItems.Count == 0) return fullMatch;
+
+            // For indented lists, don't add extra blank lines before
+            // since they should flow right after the parent list item
+            if (indentLevel > 0)
+            {
+                return "\n" + string.Join("\n", markdownItems) + "\n";
+            }
+
+            return "\n\n" + string.Join("\n", markdownItems) + "\n\n";
+        });
+    }
+
+    /// <summary>
+    /// Cleans list item content by stripping HTML tags, decoding entities, and normalizing whitespace.
+    /// </summary>
+    private static string CleanListItemContent(string itemHtml)
+    {
+        // Strip HTML tags from item content
+        var stripped = HtmlTagPattern.Replace(itemHtml, "");
+        // Decode HTML entities
+        stripped = System.Net.WebUtility.HtmlDecode(stripped);
+        // Normalize whitespace (collapse multiple spaces/newlines to single space)
+        stripped = Regex.Replace(stripped, @"\s+", " ", RegexOptions.None, RegexTimeout);
+        return stripped.Trim();
     }
 
     /// <summary>
@@ -578,5 +891,158 @@ public static class MarkdownCleaningHelper
         text = CleanOutlookStyleLinks(text);
 
         return text;
+    }
+
+    /// <summary>
+    /// Converts HTML pre tags to Markdown fenced code blocks with language detection.
+    /// Uses placeholders that survive whitespace normalization.
+    /// </summary>
+    private static string ConvertPreTagsToCodeFences(string html)
+    {
+        return PreTagPattern.Replace(html, match =>
+        {
+            var content = match.Groups[1].Value;
+
+            // Strip any remaining HTML tags inside the pre
+            content = HtmlTagPattern.Replace(content, "");
+
+            // Decode HTML entities
+            content = System.Net.WebUtility.HtmlDecode(content);
+
+            // Detect language
+            var language = DetectCodeLanguage(content);
+
+            // Use placeholders that will survive whitespace normalization
+            // Also escape newlines in the content to preserve preformatted structure
+            var escapedContent = content.Trim().Replace("\n", "{{CODE_NEWLINE}}");
+            // Format: {{CODE_FENCE_START:language}}content{{CODE_FENCE_END}}
+            return $"{{{{CODE_FENCE_START:{language}}}}}{escapedContent}{{{{CODE_FENCE_END}}}}";
+        });
+    }
+
+    /// <summary>
+    /// Restores code fence placeholders to actual markdown fenced code blocks.
+    /// </summary>
+    private static string RestoreCodeFencePlaceholders(string text)
+    {
+        // Pattern to match {{CODE_FENCE_START:language}}content{{CODE_FENCE_END}}
+        var pattern = new Regex(
+            @"\{\{CODE_FENCE_START:([^}]*)\}\}(.*?)\{\{CODE_FENCE_END\}\}",
+            RegexOptions.Singleline | RegexOptions.Compiled,
+            RegexTimeout);
+
+        return pattern.Replace(text, match =>
+        {
+            var language = match.Groups[1].Value;
+            var content = match.Groups[2].Value;
+
+            // Restore newline placeholders
+            content = content.Replace("{{CODE_NEWLINE}}", "\n");
+
+            // Build the actual markdown code fence
+            return $"\n\n```{language}\n{content}\n```\n\n";
+        });
+    }
+
+    /// <summary>
+    /// Detects the programming language of code content using deterministic pattern matching.
+    /// Returns the language identifier for syntax highlighting, or empty string if unknown.
+    /// </summary>
+    private static string DetectCodeLanguage(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return "";
+
+        var trimmed = content.TrimStart();
+
+        // JSON: starts with { or [ and contains "key": pattern
+        if ((trimmed.StartsWith('{') || trimmed.StartsWith('[')) &&
+            Regex.IsMatch(content, @"""[^""]+"":", RegexOptions.None, RegexTimeout))
+        {
+            return "json";
+        }
+
+        // HTML: starts with < and contains DOCTYPE or common HTML tags
+        if (trimmed.StartsWith('<') &&
+            (content.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+             Regex.IsMatch(content, @"<(html|head|body|div|span|table|form)\b", RegexOptions.IgnoreCase, RegexTimeout)))
+        {
+            return "html";
+        }
+
+        // XML: starts with <?xml or has xmlns attribute
+        if (trimmed.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase) ||
+            content.Contains("xmlns=", StringComparison.OrdinalIgnoreCase))
+        {
+            return "xml";
+        }
+
+        // Java: import java., package, or Java-specific patterns
+        // Check before C# since both can have "public class" but Java has distinct imports
+        if (Regex.IsMatch(content, @"\bimport\s+java\.", RegexOptions.None, RegexTimeout) ||
+            Regex.IsMatch(content, @"\bpackage\s+[\w.]+;", RegexOptions.None, RegexTimeout) ||
+            content.Contains("System.out.println"))
+        {
+            return "java";
+        }
+
+        // C#: using statements, namespace, or C#-specific keywords
+        if (Regex.IsMatch(content, @"\busing\s+(System|Microsoft)\b", RegexOptions.None, RegexTimeout) ||
+            Regex.IsMatch(content, @"\bnamespace\s+[\w.]+\s*\{", RegexOptions.None, RegexTimeout) ||
+            Regex.IsMatch(content, @"\b(public|private|internal)\s+(class|interface|struct|record)\s+\w+", RegexOptions.None, RegexTimeout))
+        {
+            return "csharp";
+        }
+
+        // Python: def, import, from...import, or class with colon
+        if (Regex.IsMatch(content, @"^\s*def\s+\w+\s*\(", RegexOptions.Multiline, RegexTimeout) ||
+            Regex.IsMatch(content, @"^\s*from\s+\w+\s+import\s+", RegexOptions.Multiline, RegexTimeout) ||
+            Regex.IsMatch(content, @"^\s*import\s+\w+", RegexOptions.Multiline, RegexTimeout) ||
+            Regex.IsMatch(content, @"^\s*class\s+\w+.*:", RegexOptions.Multiline, RegexTimeout))
+        {
+            return "python";
+        }
+
+        // TypeScript: interface/type declarations with type annotations
+        if (Regex.IsMatch(content, @"\b(interface|type)\s+\w+\s*[={]", RegexOptions.None, RegexTimeout) ||
+            Regex.IsMatch(content, @":\s*(string|number|boolean|void)\b", RegexOptions.None, RegexTimeout))
+        {
+            return "typescript";
+        }
+
+        // C/C++: #include, int main, std::, nullptr, printf
+        if (Regex.IsMatch(content, @"#include\s*[<""]", RegexOptions.None, RegexTimeout))
+        {
+            // Distinguish C++ from C
+            if (content.Contains("std::") || content.Contains("nullptr") ||
+                Regex.IsMatch(content, @"\b(cout|cin|endl|vector|string)\b", RegexOptions.None, RegexTimeout))
+            {
+                return "cpp";
+            }
+            return "c";
+        }
+
+        // CSS: contains selector patterns like .class { or #id { or property: value;
+        if (Regex.IsMatch(content, @"[\.\#][\w-]+\s*\{", RegexOptions.None, RegexTimeout) ||
+            Regex.IsMatch(content, @"\b[\w-]+\s*:\s*[\w#-]+\s*;", RegexOptions.None, RegexTimeout))
+        {
+            return "css";
+        }
+
+        // JavaScript: stack traces with "at function (file:line)"
+        if (Regex.IsMatch(content, @"\bat\s+\w+.*\(.*:\d+:\d+\)", RegexOptions.None, RegexTimeout))
+        {
+            return "javascript";
+        }
+
+        // JavaScript: function keywords
+        if (Regex.IsMatch(content, @"\b(function|const|let|var)\s+\w+", RegexOptions.None, RegexTimeout) ||
+            content.Contains(" => "))
+        {
+            return "javascript";
+        }
+
+        // No language detected
+        return "";
     }
 }
