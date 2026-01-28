@@ -1789,4 +1789,321 @@ int main() {
     }
 
     #endregion
+
+    #region Tracking Pixel Stripping Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithSendGridTrackingPixel_RemovesTrackingPixel()
+    {
+        var input = @"<p>Hello!</p>
+<img src=""https://ct.sendgrid.net/wf/open?u=abc123"" width=""1"" height=""1"">
+<p>Goodbye!</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("sendgrid.net");
+        result.Should().NotContain("![image]");
+        result.Should().Contain("Hello!");
+        result.Should().Contain("Goodbye!");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMixedTrackingAndLegitimateImages_PreservesLegitimate()
+    {
+        var input = @"<p>Check this out:</p>
+<img src=""https://example.com/products/photo.jpg"" alt=""Product"">
+<img src=""https://emltrk.com/tracking"" width=""1"" height=""1"">
+<p>Thanks!</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("![image](https://example.com/products/photo.jpg)");
+        result.Should().NotContain("emltrk.com");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithCidImage_PreservesCidReference()
+    {
+        var input = @"<img src=""cid:image001@localpart"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("![image](cid:image001@localpart)");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithDataUri_PreservesDataUri()
+    {
+        var input = @"<img src=""data:image/png;base64,iVBORw0KGgo"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain("![image](data:image/png;base64,iVBORw0KGgo)");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithIndiegogoTrackingPixel_RemovesIt()
+    {
+        // User-reported Indiegogo tracking pixel
+        var input = @"<img src=""https://e.p.indiegogo.com/o/p/1416:c4c9f9735fcc5c13e1c1edd4f14dbcf3:d240930:62b48fc4510d514ee10eecdf:1727697280694/eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3Mjc2OTcyODF9.wlVTB1UxAFroAcNU-P5KcSidhqpeCBKXyOXUARBxGFg"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("indiegogo.com");
+        result.Should().NotContain("![image]");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithCordialTrackingPixel_RemovesIt()
+    {
+        // User-reported Cordial tracking pixel
+        var input = @"<img src=""http://track.sp.crdl.io/q/Y3EMFNpDIZc5NHN2aLwhrQ~~/AAAABAA~/RgRo3RaBPlcHY29yZGlhbEIKZuyBkfpmfS142VIXYXBvbG9uQHRvcnFzb2Z0d2FyZS5jb21YBAAAAAM~"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("crdl.io");
+        result.Should().NotContain("![image]");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMultipleTrackingPixels_RemovesAll()
+    {
+        var input = @"<p>Content</p>
+<img src=""https://ct.sendgrid.net/wf/open?u=1"">
+<img src=""https://emltrk.com/t"">
+<img src=""https://mixmax.com/api/track"">
+<p>End</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("sendgrid");
+        result.Should().NotContain("emltrk");
+        result.Should().NotContain("mixmax");
+        result.Should().Contain("Content");
+        result.Should().Contain("End");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTrackingPixelInMiddleOfContent_RemovesCleanly()
+    {
+        var input = @"<p>Before<img src=""https://mailstat.us/tr/t/xxxx"">After</p>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().NotContain("mailstat");
+        result.Should().Contain("Before");
+        result.Should().Contain("After");
+    }
+
+    #endregion
+
+    #region Table Cell Pipe Character Escaping Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithTableCellsContainingPipeCharacters_EscapesPipes()
+    {
+        // Bug: When table cells contain literal | characters (like navigation separators),
+        // these break the markdown table structure causing mismatched column counts.
+        // Example from Amazon email: navigation bar with "Your Orders | Your Account | Amazon.com.au"
+        var input = @"<table>
+<tr>
+<td>Logo</td>
+<td>Your Orders | Your Account | Amazon.com.au</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The pipe characters should be escaped so the table has consistent columns
+        // Parse the markdown table to verify structure
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var headerLine = lines.FirstOrDefault(l => l.StartsWith('|') && !l.Contains("---"));
+        var separatorLine = lines.FirstOrDefault(l => l.Contains("---"));
+
+        headerLine.Should().NotBeNull("should have a header row");
+        separatorLine.Should().NotBeNull("should have a separator row");
+
+        // Count unescaped pipes (column delimiters) - escaped \| should not count
+        // Replace escaped pipes with placeholder, then count remaining pipes
+        var headerUnescaped = headerLine!.Replace("\\|", "");
+        var separatorUnescaped = separatorLine!.Replace("\\|", "");
+        var headerPipes = headerUnescaped.Count(c => c == '|');
+        var separatorPipes = separatorUnescaped.Count(c => c == '|');
+
+        // The number of unescaped pipes should match (indicating same number of columns)
+        headerPipes.Should().Be(separatorPipes,
+            $"Header row has {headerPipes} unescaped pipes but separator has {separatorPipes}. " +
+            $"Header: '{headerLine}', Separator: '{separatorLine}'");
+
+        // Verify the escaped content is present
+        result.Should().Contain("\\|", "pipe characters should be escaped in cell content");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithAmazonNavigationStyleTable_ProducesValidMarkdownTable()
+    {
+        // Exact pattern from Amazon email - navigation with span-wrapped pipe separators
+        var input = @"<table>
+<tr>
+<td>Logo</td>
+<td></td>
+<td>Your Orders</td>
+<td><span>|</span> Your Account <span>|</span> Amazon.com.au</td>
+</tr>
+<tr>
+<td colspan=""4"">Order Confirmation</td>
+</tr>
+</table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The table should be valid markdown
+        var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var tableLines = lines.Where(l => l.StartsWith('|')).ToList();
+
+        tableLines.Count.Should().BeGreaterThan(0, "should have table rows");
+
+        // First row (header) and separator should have same column count
+        // Count unescaped pipes only (escaped \| don't act as column delimiters)
+        if (tableLines.Count >= 2)
+        {
+            var headerUnescaped = tableLines[0].Replace("\\|", "");
+            var separatorUnescaped = tableLines[1].Replace("\\|", "");
+            var headerPipes = headerUnescaped.Count(c => c == '|');
+            var separatorPipes = separatorUnescaped.Count(c => c == '|');
+            headerPipes.Should().Be(separatorPipes,
+                $"Mismatched columns. Header: '{tableLines[0]}', Separator: '{tableLines[1]}'");
+        }
+    }
+
+    [Theory]
+    [InlineData("Text | More", "Text \\| More")]
+    [InlineData("A|B|C", "A\\|B\\|C")]
+    [InlineData("No pipes here", "No pipes here")]
+    public void CleanCellContent_WithPipeCharacters_ShouldEscapeThem(string cellContent, string expected)
+    {
+        // Direct test of CleanCellContent behavior through ConvertHtmlToMarkdown
+        var input = $"<table><tr><td>{cellContent}</td></tr></table>";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        result.Should().Contain(expected);
+    }
+
+    #endregion
+
+    #region Image Leading Whitespace Tests
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithIndentedImageInHtml_ShouldNotProduceCodeBlock()
+    {
+        // Bug: Images at the end of HTML documents often have leading whitespace from the HTML structure.
+        // When this whitespace is 4+ spaces, markdown treats the image as a code block.
+        // This test reproduces the issue from Microsoft Azure SafeLink emails.
+        var input = @"<table>
+<tr><td>Content</td></tr>
+</table>
+        <img src=""https://example.com/image.png"" alt="""">
+   ";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The image should render as markdown, not as a code block
+        // Images on lines with 4+ leading spaces become code blocks and don't render
+        // Check that the image line doesn't start with 4+ spaces
+        var lines = result.Split('\n');
+        var imageLine = lines.FirstOrDefault(l => l.Contains("![image]"));
+
+        imageLine.Should().NotBeNull("image should be present in output");
+        // The image line should not have 4 or more leading spaces (which would make it a code block)
+        var leadingSpaces = imageLine!.TakeWhile(c => c == ' ').Count();
+        leadingSpaces.Should().BeLessThan(4, "image with 4+ leading spaces becomes a code block and won't render");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithWhitespaceBeforeStandaloneImage_TrimsLeadingWhitespace()
+    {
+        // Simplified test case - just whitespace before an image
+        var input = @"<p>Some content.</p>
+           <img src=""https://example.com/photo.jpg"">";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // The output should have the image, but not with code-block-inducing whitespace
+        result.Should().Contain("![image](https://example.com/photo.jpg)");
+
+        // Check that when the image appears at the start of a line, it doesn't have 4+ spaces
+        var lines = result.Split('\n');
+        foreach (var line in lines)
+        {
+            if (line.Contains("![image]"))
+            {
+                var leadingSpaces = line.TakeWhile(c => c == ' ').Count();
+                leadingSpaces.Should().BeLessThan(4, $"line '{line}' has too many leading spaces");
+            }
+        }
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithImageAtEndOfDocument_NoLeadingWhitespace()
+    {
+        // Pattern from the Microsoft email - image at end of document with lots of whitespace
+        var input = @"<html><body>
+<p>Email content here.</p>
+</body></html>
+        <img src=""https://example.com/footer.png"">
+   ";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Image should be present
+        result.Should().Contain("![image](https://example.com/footer.png)");
+
+        // No line should have an image with 4+ leading spaces
+        var lines = result.Split('\n');
+        var imageLine = lines.FirstOrDefault(l => l.Contains("![image]"));
+        imageLine.Should().NotBeNull();
+
+        var trimmedImage = imageLine!.TrimStart();
+        trimmedImage.Should().StartWith("![image]", "image should not have excessive leading whitespace");
+    }
+
+    [Fact]
+    public void ConvertHtmlToMarkdown_WithMicrosoftEmailStructure_ImageDoesNotHaveCodeBlockIndentation()
+    {
+        // This reproduces the exact pattern from Microsoft Azure SafeLink emails
+        // Multiple closing tags followed by newlines and heavily indented img tag
+        // The whitespace pattern is: closing tags, then blank lines with indentation
+        var input = @"</tr></tbody></table>
+
+                                        </center>
+                                    </td></tr></tbody></table>
+                                </td></tr></tbody></table>
+                            </td>
+                        </tr>
+                    </tbody></table>
+                </center>
+            </td>
+        </tr>
+    </tbody></table>
+        <img src=""https://example.com/tracking.png"" alt="""">
+";
+
+        var result = MarkdownCleaningHelper.ConvertHtmlToMarkdown(input);
+
+        // Check if the image is present
+        if (result.Contains("![image]"))
+        {
+            // If image is present, verify it doesn't have 4+ leading spaces
+            var lines = result.Split('\n');
+            var imageLine = lines.FirstOrDefault(l => l.Contains("![image]"));
+            imageLine.Should().NotBeNull();
+
+            var leadingSpaces = imageLine!.TakeWhile(c => c == ' ').Count();
+            leadingSpaces.Should().BeLessThan(4,
+                $"image with {leadingSpaces} leading spaces becomes a code block. Line: '{imageLine}'");
+        }
+    }
+
+    #endregion
 }

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/Data.Apolon/Outlook/transformed/Inbox/Processed/2024/09/**)"
+    ]
+  }
+}

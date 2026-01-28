@@ -418,7 +418,17 @@ public static class MarkdownCleaningHelper
 
         // Convert remaining images: <img src="cid:..."> → ![image](cid:...)
         // This handles images not inside Outlook table lists
-        result = ImageTagPattern.Replace(result, "![image]($1)");
+        // Tracking pixel images are stripped (returns empty string)
+        result = ImageTagPattern.Replace(result, match =>
+        {
+            var src = match.Groups[1].Value;
+            if (TrackingPixelDetector.IsTrackingPixel(src))
+            {
+                return ""; // Strip tracking pixel
+            }
+
+            return $"![image]({src})";
+        });
 
         // Convert closing block-level tags to paragraph breaks AFTER table/list conversion
         // (Table/list conversion relies on <p> structure for image-only paragraph detection)
@@ -831,7 +841,8 @@ public static class MarkdownCleaningHelper
     }
 
     /// <summary>
-    /// Cleans cell content by stripping inner HTML tags and trimming whitespace.
+    /// Cleans cell content by stripping inner HTML tags, trimming whitespace,
+    /// and escaping pipe characters that would break markdown table structure.
     /// </summary>
     private static string CleanCellContent(string cellHtml)
     {
@@ -841,6 +852,9 @@ public static class MarkdownCleaningHelper
         stripped = System.Net.WebUtility.HtmlDecode(stripped);
         // Replace multiple whitespace with single space
         stripped = Regex.Replace(stripped, @"\s+", " ", RegexOptions.None, RegexTimeout);
+        // Escape pipe characters to prevent breaking markdown table structure
+        // (literal | in content would be interpreted as column delimiter)
+        stripped = stripped.Replace("|", "\\|");
         return stripped.Trim();
     }
 
