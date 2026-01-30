@@ -1,0 +1,46 @@
+{
+  "description": "Hooks to protect read-only archive folders and enforce use of query-sql command instead of sqlite3",
+  "readOnlyPaths": [
+    "eml/",
+    "status/",
+    "transformed/"
+  ],
+  "hooks": {
+    "beforeEdit": {
+      "enabled": true,
+      "description": "Prevent modifications to read-only folders",
+      "action": "block",
+      "message": "Cannot modify read-only archive folders: eml/, status/, or transformed/. These folders are managed by m365-mail-mirror and any manual modifications will corrupt the archive. To regenerate content, use the m365-mail-mirror transform command instead."
+    },
+    "beforeWrite": {
+      "enabled": true,
+      "description": "Prevent writes to read-only folders",
+      "action": "block",
+      "message": "Cannot write to read-only archive folders: eml/, status/, or transformed/. These folders are managed by m365-mail-mirror and any manual modifications will corrupt the archive."
+    },
+    "beforeBash": {
+      "enabled": true,
+      "description": "Block direct sqlite3 CLI access - enforce use of m365-mail-mirror query-sql",
+      "action": "block",
+      "patterns": [
+        "^\\s*sqlite3\\s+",
+        "\\bsqlite3\\b.*\\.sync\\.db",
+        "^\\s*(python|python3|node|ruby).*sqlite3",
+        "^\\s*sqlite.*\\.sync\\.db"
+      ],
+      "message": "❌ Direct sqlite3 access is BLOCKED.\n\n✅ Use the official M365 Mail Mirror query command instead:\n   m365-mail-mirror query-sql \"SELECT subject, sender FROM messages LIMIT 10\"\n\nWhy sqlite3 is blocked:\n  • Bypasses archive integrity safeguards\n  • Results not optimized for AI context\n  • Risk of database corruption\n  • No proper formatting support\n\nThe query-sql command provides:\n  • Markdown table output (default, best for AI)\n  • JSON output (--format json)\n  • CSV output (--format csv)\n  • Full SQL support\n  • Archive integrity guarantees\n\nNeed help with a SQL query? Ask and I'll help you formulate it!"
+    }
+  },
+  "validationRules": [
+    {
+      "pattern": "^(eml|status|transformed)/",
+      "type": "forbidden_modification",
+      "reason": "Archive integrity - folders are managed by m365-mail-mirror sync and transform commands"
+    },
+    {
+      "pattern": "sqlite3|.sync.db.*sqlite|python.*sqlite3|node.*sqlite",
+      "type": "forbidden_database_access",
+      "reason": "Direct database access is forbidden - use m365-mail-mirror query-sql command instead"
+    }
+  ]
+}

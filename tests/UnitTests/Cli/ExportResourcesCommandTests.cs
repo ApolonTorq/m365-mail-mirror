@@ -1,7 +1,9 @@
 using CliFx.Exceptions;
 using CliFx.Infrastructure;
 using M365MailMirror.Cli.Commands;
+using M365MailMirror.Cli.Services;
 using FluentAssertions;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace M365MailMirror.UnitTests.Cli;
@@ -123,4 +125,75 @@ public class ExportResourcesCommandTests
         output.Should().Contain(tempDir.Path);
         File.Exists(Path.Combine(tempDir.Path, "CLAUDE.md")).Should().BeTrue();
     }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdatesPathInSettingsLocalJson()
+    {
+        // Arrange
+        using var tempDir = new TemporaryDirectory();
+        using var console = new FakeInMemoryConsole();
+        var command = new ExportResourcesCommand
+        {
+            ArchivePath = tempDir.Path
+        };
+
+        var expectedToolDir = PathConfigurationService.GetToolDirectory();
+
+        // Act
+        await command.ExecuteAsync(console);
+
+        // Assert
+        var settingsPath = Path.Combine(tempDir.Path, ".claude", "settings.local.json");
+        File.Exists(settingsPath).Should().BeTrue();
+
+        var content = File.ReadAllText(settingsPath);
+        var json = JsonNode.Parse(content);
+        var pathValue = json!["env"]!["PATH"]!.GetValue<string>();
+
+        // Verify tool directory is in the PATH
+        pathValue.Should().StartWith(expectedToolDir.Replace("\\", "/"));
+        pathValue.Should().Contain(":$PATH");
+
+        var output = console.ReadOutputString();
+        output.Should().Contain("Updated PATH");
+        output.Should().Contain("settings.local.json");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PreservesExistingSettingsWhenUpdatingPath()
+    {
+        // Arrange
+        using var tempDir = new TemporaryDirectory();
+        var claudeDir = Path.Combine(tempDir.Path, ".claude");
+        Directory.CreateDirectory(claudeDir);
+
+        // Create existing settings with permissions
+        var existingSettings = """
+        {
+          "permissions": {
+            "allow": ["Read", "Write"]
+          }
+        }
+        """;
+        var settingsPath = Path.Combine(claudeDir, "settings.local.json");
+        File.WriteAllText(settingsPath, existingSettings);
+
+        using var console = new FakeInMemoryConsole();
+        var command = new ExportResourcesCommand
+        {
+            ArchivePath = tempDir.Path
+        };
+
+        // Act
+        await command.ExecuteAsync(console);
+
+        // Assert
+        var updatedContent = File.ReadAllText(settingsPath);
+        updatedContent.Should().Contain("\"permissions\"");
+        updatedContent.Should().Contain("\"allow\"");
+        updatedContent.Should().Contain("\"Read\"");
+        updatedContent.Should().Contain("\"Write\"");
+        updatedContent.Should().Contain("\"PATH\"");
+    }
+
 }

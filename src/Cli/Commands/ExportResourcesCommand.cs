@@ -66,5 +66,20 @@ public class ExportResourcesCommand : BaseCommand
             };
             await console.Output.WriteLineAsync($"  {statusText}");
         }
+
+        // Update PATH in settings.local.json with the tool's directory
+        try
+        {
+            var toolDirectory = PathConfigurationService.GetToolDirectory();
+            var pathEntry = PathConfigurationService.GeneratePathEntry(toolDirectory);
+            PathConfigurationService.UpdateSettingsLocalJson(outputPath, pathEntry);
+            await console.Output.WriteLineAsync($"Updated PATH in .claude/settings.local.json to include: {toolDirectory}");
+            logger.Info($"Successfully updated PATH configuration in settings.local.json with tool directory: {toolDirectory}");
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"Failed to update PATH configuration: {ex.Message}");
+            await console.Output.WriteLineAsync($"Warning: Could not update PATH configuration: {ex.Message}");
+        }
     }
 }

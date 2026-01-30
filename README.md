@@ -420,6 +420,61 @@ m365-mail-mirror auth refresh
 m365-mail-mirror auth logout
 ```
 
+### `export-resources` - Export Configuration and Documentation
+
+Export embedded resources (documentation, skills, Claude Code configuration) to your archive directory.
+
+```bash
+# Export resources to default archive location
+m365-mail-mirror export-resources
+
+# Export to custom directory
+m365-mail-mirror export-resources --archive /path/to/archive
+
+# Overwrite existing files
+m365-mail-mirror export-resources --overwrite
+```
+
+**What gets exported**:
+
+- **CLAUDE.md**: Comprehensive guide for using the archive with Claude Code and AI assistants
+- **Configuration files**: `.claude/config.json`, `.claude/README.md`, `.claude/hooks.json`
+- **IDE settings**: `.vscode/settings.json` with performance optimizations
+- **Ignore files**: `.gitignore`, `.copilotignore`, `.cursorignore`
+
+**Automatic PATH Configuration**:
+
+When you export resources, the tool automatically detects its own location and updates `.claude/settings.local.json` to add the m365-mail-mirror directory to your system PATH. This enables the m365-mail-mirror command to be available directly in your shell from anywhere:
+
+```json
+{
+  "env": {
+    "PATH": "/path/to/m365-mail-mirror/bin:$PATH"
+  }
+}
+```
+
+This means:
+- No manual PATH editing required after export
+- The tool adds itself to PATH automatically
+- Inherits your existing PATH (via `$PATH` token)
+- Works with Git Bash, WSL, and standard shells
+- Settings are merged with existing configuration (permissions preserved)
+- You can run `m365-mail-mirror` commands from any directory
+
+**When to use**:
+
+- First time setting up your archive (generates all needed config files)
+- Updating documentation or configuration files to latest version
+- Setting up Claude Code integration for AI-assisted analysis
+
+**Options**:
+
+- `--archive <path>, -a`: Export to custom directory (default: from config)
+- `--overwrite`: Replace existing files (default: skip)
+- `--config <path>, -c`: Use custom configuration file
+- `--verbose, -v`: Enable verbose logging
+
 ## Configuration
 
 ### Configuration File Location

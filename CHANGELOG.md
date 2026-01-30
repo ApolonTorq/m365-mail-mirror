@@ -40,6 +40,7 @@ Feature completion is tracked with checkboxes:
 - [x] **Configuration-first transformation options** (ADR-010): Transformation settings (HTML, Markdown, attachments) now default from config file with CLI flags as overrides. New options: `inlineStyles`, `stripExternalImages`, `hideCc`, `hideBcc` for HTML; `skipExecutables` for attachments
 - [x] **Outlook Web deep links** (ADR-011): HTML and Markdown outputs include optional "View in Outlook" link using ImmutableId for stable navigation back to source message. Supports both personal and shared mailboxes via `includeOutlookLink` config option
 - [x] **Clean transformation option**: New `--clean` flag for transform command deletes all transformed content (directory and database records) and regenerates from EML files. Requires confirmation prompt unless `--yes` flag is provided for non-interactive use.
+- [x] **Auto-configure PATH in `settings.local.json`**: When exporting resources with `export-resources` command, the tool automatically updates `.claude/settings.local.json` to add the export directory to your system PATH, inheriting existing PATH configuration. Users no longer need to manually edit PATH settings.
 
 ### Changed
 

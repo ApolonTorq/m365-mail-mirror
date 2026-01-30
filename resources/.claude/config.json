@@ -1,0 +1,74 @@
+{
+  "archiveType": "m365-mail-mirror",
+  "archiveVersion": "1.0",
+  "description": "Microsoft 365 mailbox archive with EML-first architecture and derived outputs",
+  "readOnlyFolders": {
+    "eml": {
+      "path": "eml/",
+      "type": "canonical_archive",
+      "managed_by": "m365-mail-mirror sync",
+      "description": "Original RFC 2822 EML files downloaded from Microsoft 365",
+      "modification_policy": "forbidden",
+      "reason": "Source of truth - modifications will break sync and create inconsistencies"
+    },
+    "status": {
+      "path": "status/",
+      "type": "state_database",
+      "managed_by": "m365-mail-mirror sync",
+      "description": "SQLite database containing message metadata, sync state, and transformation tracking",
+      "modification_policy": "forbidden",
+      "reason": "Modifications corrupt state tracking and break future syncs",
+      "critical_files": [".sync.db"]
+    },
+    "transformed": {
+      "path": "transformed/",
+      "type": "derived_outputs",
+      "managed_by": "m365-mail-mirror transform",
+      "description": "Generated Markdown, HTML, and extracted attachments",
+      "modification_policy": "forbidden",
+      "reason": "Derived from EML source - manual changes will be overwritten on next transform",
+      "subfolder_examples": [
+        "YYYY/MM/*.md (Markdown files)",
+        "YYYY/MM/images/ (inline images)",
+        "YYYY/MM/attachments/ (extracted files)",
+        "YYYY/MM/index.md (monthly index)"
+      ]
+    }
+  },
+  "writableFolders": {
+    "_Quarantine": {
+      "path": "_Quarantine/",
+      "type": "soft_deleted_messages",
+      "managed_by": "m365-mail-mirror sync",
+      "modification_policy": "read_only",
+      "reason": "Contains deleted messages - should not be edited",
+      "description": "Messages soft-deleted in M365 (preserved in archive)"
+    }
+  },
+  "safeOperations": [
+    "Read any file",
+    "Query status/.sync.db with query-sql command",
+    "Run sync command",
+    "Run transform command",
+    "Create analysis files outside protected folders",
+    "Access transformed/YYYY/MM/*.md for research"
+  ],
+  "forbiddenOperations": [
+    "Edit files in eml/",
+    "Edit files in status/",
+    "Edit files in transformed/",
+    "Delete files in eml/, status/, or transformed/",
+    "Manually modify .sync.db",
+    "Create new files in eml/, status/, or transformed/",
+    "Rename or move files in protected folders"
+  ],
+  "archiveIntegrity": {
+    "checksumFile": null,
+    "validationCommand": "m365-mail-mirror verify",
+    "corruptionRecovery": "Ensure eml/ folder is intact, then run 'transform' and 'sync' to rebuild state"
+  },
+  "toolInstructions": {
+    "aiAssistant": "This archive is managed by m365-mail-mirror. Do not attempt to modify eml/, status/, or transformed/ folders. Use the tool's commands for all modifications.",
+    "claudeCodeUser": "Protected by hooks in .claude/hooks.json - attempts to edit protected folders will be blocked with a message explaining why."
+  }
+}

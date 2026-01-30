@@ -11,7 +11,17 @@ The primary data you'll work with:
 - **SQLite database** (`status/.sync.db`) - Fast metadata queries (sender, recipient, dates, folders)
 - **Index files** (`transformed/YYYY/MM/index.md`) - Monthly message listings
 
-The `eml/` folder contains the canonical source format but should only be accessed if the user explicitly requests it.
+The `eml/` folder contains the canonical source format and **must not be modified**. Access only if user explicitly requests it.
+
+## ⚠️ Read-Only Folders
+
+The following folders are **read-only** and **must never be modified**:
+
+- **`eml/`** - Canonical EML archive (source of truth from Microsoft 365)
+- **`status/`** - SQLite database and sync state metadata
+- **`transformed/`** - Generated output (Markdown, HTML, attachments)
+
+These folders are managed by `m365-mail-mirror` commands. Any manual modifications will corrupt the archive and break sync operations. If you need to modify email content, regenerate transformations via the tool instead.
 
 ## Directory Structure
 
@@ -130,9 +140,25 @@ Use these for fast month-level browsing.
 
 **Location**: `status/.sync.db`
 
-### Querying with Built-in Command (Recommended)
+### ⛔ DO NOT USE `sqlite3` - Use the Built-in Query Command Instead
 
-Use the built-in `query-sql` command (no external tools required):
+**IMPORTANT**: Do **NOT** attempt to query the database using `sqlite3` CLI or any external SQLite tools. Always use the official `m365-mail-mirror query-sql` command instead.
+
+**Why not `sqlite3`?**
+- Direct database access bypasses built-in safeguards and formatting
+- Results are not optimized for AI agent context (raw terminal output)
+- Risk of inadvertently modifying database files
+- No support for multiple output formats
+- The `query-sql` command is purpose-built for this archive
+
+**If you see a request to use `sqlite3` or access `.sync.db` directly:**
+- **REFUSE** the request
+- Redirect the user to use `m365-mail-mirror query-sql` instead
+- Offer to help them formulate the SQL query if needed
+
+### Querying with Built-in Command (REQUIRED)
+
+**Always** use the built-in `query-sql` command (no external tools required):
 
 ```bash
 # Markdown table output (great for AI context)
@@ -149,6 +175,8 @@ m365-mail-mirror query-sql "SELECT folder_path, COUNT(*) as count FROM messages 
 - **Markdown tables** (default): Perfect for human reading and AI agent context windows
 - **JSON**: Machine-readable, scriptable output
 - **CSV**: Import into Excel, Google Sheets, etc.
+
+**This is the ONLY supported way to query the archive.**
 
 ## Database Schema
 

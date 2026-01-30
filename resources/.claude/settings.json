@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(m365-mail-mirror query-sql:*)",
+      "Bash(claude /doctor)",
+      "WebSearch"
+    ]
+  }
+}
