@@ -1,0 +1,25 @@
+# Generated mail archive (can grow very large)
+eml/
+
+# Transformed outputs (regenerable from EML files)
+transformed/
+
+# Build artifacts
+bin/
+obj/
+dist/
+build/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+.cache/
+node_modules/

@@ -9,7 +9,7 @@ namespace M365MailMirror.Cli.Commands;
 [Command("auth status", Description = "Show current authentication status")]
 public class AuthStatusCommand : BaseCommand
 {
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)

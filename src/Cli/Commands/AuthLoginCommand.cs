@@ -16,7 +16,7 @@ public class AuthLoginCommand : BaseCommand
     [CommandOption("client-id", Description = "Azure AD application client ID")]
     public string? ClientId { get; init; }
 
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)

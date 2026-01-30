@@ -18,10 +18,10 @@ namespace M365MailMirror.Cli.Commands;
 [Command("sync", Description = "Download and sync emails from Microsoft 365 mailbox")]
 public class SyncCommand : BaseCommand
 {
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
-    [CommandOption("output", 'o', Description = "Output directory for the mail archive")]
+    [CommandOption("output", 'o', Description = "Output directory for the mail archive (defaults to current directory)")]
     public string? OutputPath { get; init; }
 
     [CommandOption("verbose", 'v', Description = "Show detailed debug logging")]

@@ -352,6 +352,56 @@ Checks for:
 - EML files not tracked in database
 - Incomplete or corrupted transformations
 
+### `query-sql` - Execute SQL Queries
+
+Query the SQLite metadata database directly without installing external SQLite CLI tools.
+
+```bash
+# Find emails from a specific sender
+m365-mail-mirror query-sql "SELECT subject, received_time FROM messages WHERE sender LIKE '%john@example.com%' ORDER BY received_time DESC LIMIT 10"
+
+# Count messages by folder
+m365-mail-mirror query-sql "SELECT folder_path, COUNT(*) as count FROM messages GROUP BY folder_path"
+
+# Find messages with large attachments
+m365-mail-mirror query-sql "SELECT m.subject, a.filename, a.size_bytes FROM messages m JOIN attachments a ON m.graph_id = a.message_id WHERE a.size_bytes > 1048576"
+
+# Query from file
+m365-mail-mirror query-sql --file my-query.sql
+
+# Output as JSON for scripting
+m365-mail-mirror query-sql "SELECT * FROM messages" --format json > messages.json
+
+# Output as CSV for spreadsheets
+m365-mail-mirror query-sql "SELECT subject, sender, received_time FROM messages" --format csv > messages.csv
+```
+
+**When to use**:
+
+- Analyze mailbox metadata (senders, dates, folders)
+- Find specific emails by search criteria
+- Generate custom reports and statistics
+- Integration with AI coding agents (Claude, ChatGPT, etc.)
+
+**Options**:
+
+- `--format <markdown|json|csv>`: Output format (default: markdown)
+  - **Markdown**: GitHub-flavored tables, optimal for AI context windows
+  - **JSON**: Structured array of objects for scripting
+  - **CSV**: RFC 4180 format for spreadsheet import
+- `--limit <n>`: Maximum rows to return (default: 10000, use 0 for unlimited)
+- `--read-only <true|false>`: Enforce read-only mode (default: true)
+- `--timeout <seconds>`: Query timeout (default: 120)
+- `--file <path>`: Read query from file instead of command line
+
+**Database schema**: See [resources/CLAUDE.md](resources/CLAUDE.md) for complete table structure and query examples.
+
+**Read-only safety**:
+
+- Read-only mode is enabled by default, blocking INSERT/UPDATE/DELETE/DROP/ALTER operations
+- SQLite connection opened in read-only mode prevents write operations at database engine level
+- Use `--read-only false` only when you intentionally need to modify the database (dangerous)
+
 ### `auth` - Authentication Management
 
 Manage Microsoft 365 authentication.

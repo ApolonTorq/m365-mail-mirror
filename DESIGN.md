@@ -254,32 +254,66 @@ See [ADR-012: Flat Date-Based Storage](decisions/adr-012-flat-date-based-storage
 
 ### File Naming Algorithm
 
-**Format**: `{sanitized-subject}_{HHMM}.{ext}`
+**Format**: `{folder-prefix}_{YYYY-MM-DD-HH-MM-SS}_{sanitized-subject}.{ext}`
 
-**Sanitization**:
+**Components**:
 
-- Replace illegal filesystem characters with underscore: `? * : " < > | / \`
-- Truncate to prevent exceeding OS path limits (260 chars on Windows)
-- Preserve Unicode characters (UTF-8 encoding)
+**1. Folder Prefix** (`folder-prefix`):
+- Derived from the original M365 folder path (e.g., "Inbox/Processed" → "inbox-processed")
+- Nested folders joined with dashes
+- Converted to lowercase
+- Spaces and illegal characters replaced with dashes
+- Consecutive dashes collapsed to single dash
+- Smart truncation at 30 characters (keeps root and deepest folder names, drops middle levels if too long)
+- Results in: lowercase alphanumeric with dashes
+- Example: `inbox` or `archive-project-budget`
 
-**Time suffix**:
-
-- Four-digit HHMM from message received time
+**2. Timestamp** (`YYYY-MM-DD-HH-MM-SS`):
+- Full datetime with **second resolution** (not just hours/minutes)
+- Format: `yyyy-MM-dd-HH-mm-ss` in invariant culture
+- Example: `2024-01-15-10-30-45`
+- From message's `ReceivedTime` property
 - Provides uniqueness within same YYYY/MM folder
-- If collision occurs, append additional precision or counter
 
-**Dynamic truncation**:
+**3. Subject** (`sanitized-subject`):
+- Original email subject sanitized for use in filenames
+- Converted to lowercase
+- Spaces replaced with dashes
+- Illegal characters replaced with dashes: `? * : " < > | / \`
+- Consecutive dashes collapsed to single dash
+- Trailing/leading dashes and dots trimmed
+- Maximum length: ~50 characters (dynamically calculated based on path context)
+- Falls back to `no-subject` if empty after sanitization
+- Example: `Re: Project Status?` → `re-project-status`
 
-```csharp
-int maxLength = GetMaxPathLength() - currentPathLength - extensionLength - 10; // 10 = buffer
-string truncated = subject.Truncate(maxLength);
-```
+**Path Length Calculation**:
+
+- Dynamic calculation ensures full path doesn't exceed 260 characters (Windows MAX_PATH)
+- Reserves space for: folder prefix (31 chars) + datetime (20 chars) + extension (4 chars) + buffer (10 chars) + collision counter (4 chars)
+- Minimum safe subject length: 10 characters, capped at 50
+
+**Collision Handling**:
+
+- If filename already exists, append collision counter: `{folder-prefix}_{datetime}_{subject}_{n}.eml`
+- Counter starts at 1 and increments until unique
+- Maximum of 1000 collision attempts before exception
+- Atomic write using temp file with process-unique counter: `{final-path}.{tempId}.tmp`
+
+**Character Sanitization**:
+
+- Illegal chars: `? * : " < > | / \` replaced with dash (`-`)
+- Spaces replaced with dashes
+- Control characters: removed
+- Normalization: NFC Unicode form
+- Case: converted to lowercase
+- Consecutive dashes: collapsed to single `-`
+- Trailing/leading: dashes, dots, spaces trimmed
 
 **Examples**:
 
-- `Meeting Notes` received at 10:30 → `Meeting_Notes_1030.eml`
-- `Re: Project Status?` received at 14:15 → `Re_Project_Status_1415.eml`
-- Very long subject → truncated to fit within path limit
+- `Meeting Notes` in Inbox received at 2024-01-15 10:30:45 → `inbox_2024-01-15-10-30-45_meeting-notes.eml`
+- `Re: Project Status?` in Archive/Budget received at 2024-01-15 14:15:22 → `archive-budget_2024-01-15-14-15-22_re-project-status.eml`
+- `Important!` with empty subject → `inbox_2024-01-15-10-30-45_no-subject.eml`
 
 ### Quarantine Folders
 

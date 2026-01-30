@@ -11,10 +11,10 @@ namespace M365MailMirror.Cli.Commands;
 [Command("verify", Description = "Verify integrity of EML files and database consistency")]
 public class VerifyCommand : BaseCommand
 {
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
-    [CommandOption("archive", 'a', Description = "Path to the mail archive")]
+    [CommandOption("archive", 'a', Description = "Path to the mail archive (defaults to config OutputPath, which defaults to current directory)")]
     public string? ArchivePath { get; init; }
 
     [CommandOption("fix", Description = "Automatically fix recoverable issues")]
@@ -191,18 +191,30 @@ public class VerifyCommand : BaseCommand
             if (missingFiles.Count > 0)
             {
                 await WriteWarningAsync(console, $"  Missing files (database references non-existent files): {missingFiles.Count}");
+                foreach (var path in missingFiles)
+                {
+                    await WriteWarningAsync(console, $"    - {path}");
+                }
             }
 
             if (untrackedFiles.Count > 0)
             {
                 console.ForegroundColor = ConsoleColor.Cyan;
                 await console.Output.WriteLineAsync($"  Untracked files (files not in database): {untrackedFiles.Count}");
+                foreach (var path in untrackedFiles)
+                {
+                    await console.Output.WriteLineAsync($"    - {path}");
+                }
                 console.ResetColor();
             }
 
             if (corruptedFiles.Count > 0)
             {
                 await WriteErrorAsync(console, $"  Corrupted files (size mismatch or unreadable): {corruptedFiles.Count}");
+                foreach (var path in corruptedFiles)
+                {
+                    await WriteErrorAsync(console, $"    - {path}");
+                }
             }
 
             if (Fix && fixedCount > 0)

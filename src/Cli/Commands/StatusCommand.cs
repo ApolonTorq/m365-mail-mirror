@@ -11,10 +11,10 @@ namespace M365MailMirror.Cli.Commands;
 [Command("status", Description = "Show archive statistics and sync state")]
 public class StatusCommand : BaseCommand
 {
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
-    [CommandOption("archive", 'a', Description = "Path to the mail archive")]
+    [CommandOption("archive", 'a', Description = "Path to the mail archive (defaults to config OutputPath, which defaults to current directory)")]
     public string? ArchivePath { get; init; }
 
     [CommandOption("quarantine", 'q', Description = "Show quarantine contents")]

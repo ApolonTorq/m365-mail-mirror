@@ -9,7 +9,7 @@ namespace M365MailMirror.Cli.Commands;
 [Command("auth logout", Description = "Clear stored authentication tokens")]
 public class AuthLogoutCommand : BaseCommand
 {
-    [CommandOption("config", 'c', Description = "Path to configuration file")]
+    [CommandOption("config", 'c', Description = "Path to configuration file (searches ./config.yaml, then ~/.config/m365-mail-mirror/config.yaml)")]
     public string? ConfigPath { get; init; }
 
     protected override async ValueTask ExecuteCommandAsync(IConsole console)

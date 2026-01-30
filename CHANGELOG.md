@@ -15,6 +15,15 @@ Feature completion is tracked with checkboxes:
 
 ### Added
 
+- [x] **`query-sql` command**: Execute SQL queries against metadata database
+  - [x] Markdown table output (default) optimized for AI agent consumption
+  - [x] JSON and CSV output formats for scripting and spreadsheets
+  - [x] Read-only mode by default (blocks write operations at database and application level)
+  - [x] Query timeout (120s default, configurable) and result limits (10000 rows default)
+  - [x] `--file` parameter to read complex queries from files
+  - [x] Comprehensive unit tests (19 tests, all passing)
+  - [x] Documentation with query examples in README.md and resources/CLAUDE.md
+  - [x] Full integration with CliFx command framework
 - [x] **Flat date-based storage** (ADR-012): Messages stored in `eml/{YYYY}/{MM}/{folder-prefix}_{datetime}_{subject}.eml` structure, eliminating folder hierarchy replication and move tracking complexity. Folder path preserved as database metadata for filtering and display.
 - [x] **`--no-transform` option for sync**: Skip all transformations during sync even when HTML/Markdown/attachments are configured, useful for fast bulk downloads.
 - [x] **Tracking pixel detection**: Identifies and filters 1x1 tracking pixels from HTML email content during Markdown conversion.

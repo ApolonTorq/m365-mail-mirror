@@ -39,6 +39,26 @@
     <PackageReference Include="CliFx" Version="2.3.6" />
   </ItemGroup>
 
+  <!-- Embed resources (documentation, guides, etc.) into the executable -->
+  <!-- Explicitly include files from resources folder, excluding README.md -->
+  <ItemGroup>
+    <!-- Root level resource files -->
+    <EmbeddedResource Include="..\..\resources\*.md" Exclude="..\..\resources\README.md">
+      <LogicalName>M365MailMirror.Cli.Resources.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+
+    <!-- Files starting with dot (.*) -->
+    <EmbeddedResource Include="..\..\resources\.*" Exclude="..\..\resources\README.md">
+      <LogicalName>M365MailMirror.Cli.Resources.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+
+    <!-- Subdirectory files -->
+    <EmbeddedResource Include="..\..\resources\**\*" Exclude="..\..\resources\README.md;..\..\resources\*.md;..\..\resources\.*">
+      <!-- For subdirectories like .vscode/settings.json, create M365MailMirror.Cli.Resources..vscode.settings.json -->
+      <LogicalName>M365MailMirror.Cli.Resources.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <!-- Include README in NuGet package -->
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
