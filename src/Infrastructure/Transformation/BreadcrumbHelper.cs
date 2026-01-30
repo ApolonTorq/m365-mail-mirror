@@ -50,16 +50,6 @@ public static class BreadcrumbHelper
         return BuildHtmlBreadcrumb(segments, currentItem: null);
     }
 
-    /// <summary>
-    /// Generates Markdown breadcrumb navigation for an index file.
-    /// </summary>
-    /// <param name="indexPath">Relative path from archive root (e.g., "transformed/2024/01/index.md")</param>
-    /// <returns>Markdown line with breadcrumb links</returns>
-    public static string GenerateMarkdownIndexBreadcrumb(string indexPath)
-    {
-        var segments = ParseOutputPath(indexPath, isIndexFile: true);
-        return BuildMarkdownBreadcrumb(segments, currentItem: null);
-    }
 
     /// <summary>
     /// Converts a month number (1-12) to month name.

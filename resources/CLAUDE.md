@@ -9,7 +9,7 @@ The primary data you'll work with:
 - **Markdown files** (`transformed/YYYY/MM/*.md`) - AI-optimized email content with structured metadata
 - **Attachments** (`transformed/YYYY/MM/attachments/`) - Extracted files from emails
 - **SQLite database** (`status/.sync.db`) - Fast metadata queries (sender, recipient, dates, folders)
-- **Index files** (`transformed/YYYY/MM/index.md`) - Monthly message listings
+- **HTML indexes** (`transformed/YYYY/MM/index.html`) - Browsable navigation of messages by month
 
 The `eml/` folder contains the canonical source format and **must not be modified**. Access only if user explicitly requests it.
 
@@ -33,7 +33,7 @@ These folders are managed by `m365-mail-mirror` commands. Any manual modificatio
 ├── transformed/                      # PRIMARY FOLDER FOR QUERIES
 │   └── YYYY/MM/
 │       ├── *.md                      # Markdown email files (use these)
-│       ├── index.md                  # Month overview (use this)
+│       ├── index.html                # Month overview (browsable HTML navigation)
 │       ├── images/                   # Inline images from emails
 │       └── attachments/              # Extracted files
 │           └── {message}_attachments/
@@ -54,7 +54,7 @@ transformed/
 │   ├── 01/  # January 2024
 │   │   ├── inbox_2024-01-15-10-30-45_meeting-notes.md
 │   │   ├── archive-budget_2024-01-15-14-15-22_project-update.md
-│   │   └── index.md
+│   │   └── index.html
 │   └── 02/  # February 2024
 │       └── inbox_2024-02-10-09-00-15_monthly-report.md
 ```
@@ -123,18 +123,15 @@ Email body in Markdown format...
 
 ## Index Files
 
-**Location**: `transformed/YYYY/MM/index.md`
+**Location**: `transformed/YYYY/MM/index.html`
 
-Quick listing of all messages in a month with links:
+HTML page showing all messages in a month with links to individual emails. Open the HTML file in your browser for interactive navigation with:
+- Message subjects as clickable links
+- Sender information
+- Message dates
+- Attachment indicators
 
-```markdown
-# January 2024 Messages
-
-- [Meeting_Notes_1030.md](Meeting_Notes_1030.md) - "Meeting Notes" from john@example.com
-- [Project_Update_1415.md](Project_Update_1415.md) - "Re: Project Status" from manager@example.com
-```
-
-Use these for fast month-level browsing.
+Use these for browsable month-level navigation.
 
 ## SQLite Database
 
@@ -423,10 +420,10 @@ Messages deleted in M365 are soft-deleted here. The database marks them as `quar
 
 **When answering user questions**:
 
-1. **Start with index files**: `transformed/YYYY/MM/index.md` for month overview
-2. **Use database queries**: `status/.sync.db` for metadata filtering (sender, date, folder)
-3. **Read Markdown files**: Use results to load specific message Markdown content
-4. **Access attachments**: Via relative paths in Markdown front matter
+1. **Use database queries**: `status/.sync.db` for metadata filtering (sender, date, folder)
+2. **Read Markdown files**: Use query results to load specific message Markdown content
+3. **Access attachments**: Via relative paths in Markdown front matter
+4. **Browse HTML indexes** (optional): `transformed/YYYY/MM/index.html` for interactive month-level navigation
 5. **Never start with EML files**: Unless user explicitly requests original format
 
 **Example workflow**:

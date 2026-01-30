@@ -233,7 +233,6 @@ See [ADR-012: Flat Date-Based Storage](decisions/adr-012-flat-date-based-storage
 │           ├── Project_Update_1415.html
 │           ├── Project_Update_1415.md
 │           ├── index.html                   # Navigation index (HTML)
-│           ├── index.md                     # Navigation index (Markdown)
 │           ├── images/                      # Inline images (cid: references)
 │           │   ├── Meeting_Notes_1030_1.png
 │           │   └── Project_Update_1415_1.jpg

@@ -273,7 +273,7 @@ public class TransformCommand : BaseCommand
         }, cancellationToken);
 
         // Generate navigation indexes after transformation (skip when using --path filter)
-        if ((enableHtml || enableMarkdown) && result.Success && string.IsNullOrEmpty(normalizedFilterPath))
+        if (enableHtml && result.Success && string.IsNullOrEmpty(normalizedFilterPath))
         {
             await console.Output.WriteLineAsync();
             await console.Output.WriteLineAsync("Generating navigation indexes...");
@@ -282,14 +282,13 @@ public class TransformCommand : BaseCommand
             var indexResult = await indexService.GenerateIndexesAsync(
                 new IndexGenerationOptions
                 {
-                    GenerateHtmlIndexes = enableHtml,
-                    GenerateMarkdownIndexes = enableMarkdown
+                    GenerateHtmlIndexes = enableHtml
                 },
                 cancellationToken);
 
             if (indexResult.Success)
             {
-                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes, {indexResult.MarkdownIndexesGenerated} Markdown indexes");
+                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes");
             }
             else
             {

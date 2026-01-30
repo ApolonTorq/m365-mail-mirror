@@ -38,8 +38,6 @@ public class IndexGenerationService : IIndexGenerationService
     {
         var stopwatch = Stopwatch.StartNew();
         var htmlCount = 0;
-        var markdownCount = 0;
-        var errors = 0;
 
         try
         {
@@ -53,7 +51,7 @@ public class IndexGenerationService : IIndexGenerationService
             {
                 _logger.Info("No messages found, skipping index generation");
                 stopwatch.Stop();
-                return IndexGenerationResult.Successful(0, 0, 0, stopwatch.Elapsed);
+                return IndexGenerationResult.Successful(0, 0, stopwatch.Elapsed);
             }
 
             // Build the hierarchy structure (flat year/month)
@@ -66,15 +64,9 @@ public class IndexGenerationService : IIndexGenerationService
                 _logger.Info("Generated {0} HTML index files", htmlCount);
             }
 
-            if (options.GenerateMarkdownIndexes)
-            {
-                markdownCount = await GenerateMarkdownIndexesAsync(hierarchy, cancellationToken);
-                _logger.Info("Generated {0} Markdown index files", markdownCount);
-            }
-
             stopwatch.Stop();
             _logger.Info("Index generation completed in {0}", stopwatch.Elapsed);
-            return IndexGenerationResult.Successful(htmlCount, markdownCount, errors, stopwatch.Elapsed);
+            return IndexGenerationResult.Successful(htmlCount, 0, stopwatch.Elapsed);
         }
         catch (OperationCanceledException)
         {
@@ -222,74 +214,6 @@ public class IndexGenerationService : IIndexGenerationService
         await File.WriteAllTextAsync(indexPath, html, cancellationToken);
     }
 
-    /// <summary>
-    /// Generates Markdown index files for the entire hierarchy.
-    /// </summary>
-    private async Task<int> GenerateMarkdownIndexesAsync(IndexNode root, CancellationToken cancellationToken)
-    {
-        var count = 0;
-
-        // Generate root index in the unified transformed directory (same location as HTML)
-        await GenerateMarkdownIndexFileAsync(root, "transformed", cancellationToken);
-        count++;
-
-        // Recursively generate for all children
-        count += await GenerateMarkdownIndexesRecursiveAsync(root, "transformed", cancellationToken);
-
-        return count;
-    }
-
-    private async Task<int> GenerateMarkdownIndexesRecursiveAsync(
-        IndexNode node,
-        string basePath,
-        CancellationToken cancellationToken)
-    {
-        var count = 0;
-
-        foreach (var child in node.Children)
-        {
-            var childPath = string.IsNullOrEmpty(node.Path)
-                ? string.Concat(basePath, "/", child.Name)
-                : string.Concat(basePath, "/", child.Path);
-
-            await GenerateMarkdownIndexFileAsync(child, childPath, cancellationToken);
-            count++;
-
-            if (child.NodeType != IndexNodeType.Month)
-            {
-                count += await GenerateMarkdownIndexesRecursiveAsync(child, basePath, cancellationToken);
-            }
-        }
-
-        return count;
-    }
-
-    /// <summary>
-    /// Generates a single Markdown index file.
-    /// </summary>
-    private async Task GenerateMarkdownIndexFileAsync(
-        IndexNode node,
-        string outputDir,
-        CancellationToken cancellationToken)
-    {
-        var fullDir = Path.Combine(_archiveRoot, outputDir);
-        Directory.CreateDirectory(fullDir);
-
-        var indexPath = Path.Combine(fullDir, "index.md");
-        var relativePath = string.Concat(outputDir, "/index.md");
-
-        var breadcrumb = node.NodeType == IndexNodeType.Root
-            ? "**Archive**"
-            : BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb(relativePath);
-
-        var title = GetNodeTitle(node);
-        var content = GenerateMarkdownContent(node);
-        var upLink = GenerateMarkdownUpLink(node);
-        var stats = string.Create(CultureInfo.InvariantCulture, $"*{node.TotalMessageCount} message{(node.TotalMessageCount != 1 ? "s" : "")}*");
-
-        var markdown = GenerateMarkdownIndexTemplate(title, breadcrumb, upLink, content, stats);
-        await File.WriteAllTextAsync(indexPath, markdown, cancellationToken);
-    }
 
     private static string GetNodeTitle(IndexNode node)
     {
@@ -391,78 +315,6 @@ public class IndexGenerationService : IIndexGenerationService
         return "<div class=\"up-link\"><a href=\"../index.html\">&#8593; Up</a></div>";
     }
 
-    private static string GenerateMarkdownContent(IndexNode node)
-    {
-        var sb = new StringBuilder();
-
-        if (node.NodeType == IndexNodeType.Month && node.Messages.Count > 0)
-        {
-            // Generate email table
-            sb.AppendLine("| Subject | From | Date | |");
-            sb.AppendLine("|---------|------|------|-|");
-
-            foreach (var message in node.Messages)
-            {
-                var attachmentIcon = message.HasAttachments ? "📎" : "";
-                var formattedDate = message.ReceivedTime.ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture);
-                sb.Append("| [");
-                sb.Append(EscapeMarkdown(message.Subject));
-                sb.Append("](");
-                sb.Append(message.MarkdownFilename);
-                sb.Append(") | ");
-                sb.Append(EscapeMarkdown(message.Sender));
-                sb.Append(" | ");
-                sb.Append(formattedDate);
-                sb.Append(" | ");
-                sb.Append(attachmentIcon);
-                sb.AppendLine(" |");
-            }
-        }
-        else if (node.Children.Count > 0)
-        {
-            // Generate folder/year/month list
-            foreach (var child in node.Children)
-            {
-                var icon = child.NodeType switch
-                {
-                    IndexNodeType.MailFolder => "📁",
-                    IndexNodeType.Year => "📅",
-                    IndexNodeType.Month => "📅",
-                    _ => "📁"
-                };
-
-                // Use the last segment of Path (actual folder name) not Name (display name)
-                // This handles months where Name="January" but Path ends in "01"
-                var folderSegment = child.Path.Split('/', '\\').Last();
-                var linkPath = string.Concat(folderSegment, "/index.md");
-                var countText = child.TotalMessageCount > 0
-                    ? string.Create(CultureInfo.InvariantCulture, $" ({child.TotalMessageCount})")
-                    : "";
-                sb.Append("- ");
-                sb.Append(icon);
-                sb.Append(" [");
-                sb.Append(child.Name);
-                sb.Append("](");
-                sb.Append(linkPath);
-                sb.Append(')');
-                sb.AppendLine(countText);
-            }
-        }
-        else
-        {
-            sb.AppendLine("*No messages in this folder.*");
-        }
-
-        return sb.ToString();
-    }
-
-    private static string GenerateMarkdownUpLink(IndexNode node)
-    {
-        if (node.NodeType == IndexNodeType.Root)
-            return "";
-
-        return "[↑ Up](../index.md)\n";
-    }
 
     private static string EscapeMarkdown(string text)
     {
@@ -555,25 +407,4 @@ public class IndexGenerationService : IIndexGenerationService
 </html>");
     }
 
-    private static string GenerateMarkdownIndexTemplate(
-        string title,
-        string breadcrumb,
-        string upLink,
-        string content,
-        string stats)
-    {
-        return string.Create(CultureInfo.InvariantCulture, $@"# {title}
-
-{breadcrumb}
-
-{upLink}
----
-
-{content}
-
----
-
-{stats}
-");
-    }
 }

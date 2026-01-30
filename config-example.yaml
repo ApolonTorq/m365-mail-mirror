@@ -169,8 +169,9 @@ transform:
   # Great for browsing your archive in a web browser.
   generateHtml: true
 
-  # Generate AI-friendly Markdown files (default: false)
-  # Creates Markdown with YAML frontmatter containing metadata.
+  # Generate AI-friendly Markdown files for individual emails (default: false)
+  # Creates Markdown with YAML frontmatter containing metadata for each email file (e.g., email1.md).
+  # Note: Index files are HTML-only (index.html), not Markdown.
   # Optimized for LLMs, RAG systems, and text processing.
   generateMarkdown: false
 

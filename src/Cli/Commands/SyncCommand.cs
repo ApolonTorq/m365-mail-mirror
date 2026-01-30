@@ -358,7 +358,7 @@ public class SyncCommand : BaseCommand
         }
 
         // Generate navigation indexes if any transformations were enabled
-        if ((generateHtml || generateMarkdown) && result.Success && result.MessagesSynced > 0)
+        if (generateHtml && result.Success && result.MessagesSynced > 0)
         {
             await console.Output.WriteLineAsync();
             await console.Output.WriteLineAsync("Generating navigation indexes...");
@@ -367,14 +367,13 @@ public class SyncCommand : BaseCommand
             var indexResult = await indexService.GenerateIndexesAsync(
                 new IndexGenerationOptions
                 {
-                    GenerateHtmlIndexes = generateHtml,
-                    GenerateMarkdownIndexes = generateMarkdown
+                    GenerateHtmlIndexes = generateHtml
                 },
                 cancellationToken);
 
             if (indexResult.Success)
             {
-                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes, {indexResult.MarkdownIndexesGenerated} Markdown indexes");
+                await console.Output.WriteLineAsync($"  Generated {indexResult.HtmlIndexesGenerated} HTML indexes");
             }
             else
             {

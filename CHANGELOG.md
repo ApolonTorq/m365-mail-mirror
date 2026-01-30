@@ -63,6 +63,10 @@ Feature completion is tracked with checkboxes:
 - [x] Index file month links now use numeric folder names (e.g., `01/index.html`) instead of month names (`January/index.html`) to match actual directory structure
 - [x] Fixed duplicate progress lines during sync by removing redundant callback from inner checkpoint function
 
+### Removed
+
+- [x] **Markdown navigation indexes** (index.md): HTML indexes (index.html) are now the only navigation format. Individual email Markdown files (email1.md, email2.md) continue to be generated normally. The `generateMarkdown` config option now only controls email-level Markdown transformation, not index files.
+
 ## [0.1.0] - Initial Release
 
 Initial version where code was implemented by Claude Code based on the [README](README.md) and [DESIGN](DESIGN.md) documentation.

@@ -58,7 +58,7 @@ public class IndexGenerationServiceTests : IDisposable
             .ReturnsAsync(new List<(int Year, int Month)>());
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -77,7 +77,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 3);
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -97,45 +97,6 @@ public class IndexGenerationServiceTests : IDisposable
         File.Exists(monthIndex).Should().BeTrue();
     }
 
-    [Fact]
-    public async Task GenerateIndexesAsync_SingleMonth_GeneratesMarkdownIndexes()
-    {
-        SetupYearMonthWithMessages(2024, 1, 3);
-
-        var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = false, GenerateMarkdownIndexes = true },
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        result.HtmlIndexesGenerated.Should().Be(0);
-        result.MarkdownIndexesGenerated.Should().BeGreaterThan(0);
-
-        // Verify root index exists
-        var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.md");
-        File.Exists(rootIndex).Should().BeTrue();
-
-        // Verify month index exists
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.md");
-        File.Exists(monthIndex).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task GenerateIndexesAsync_SingleMonth_GeneratesBothFormats()
-    {
-        SetupYearMonthWithMessages(2024, 1, 3);
-
-        var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        result.HtmlIndexesGenerated.Should().BeGreaterThan(0);
-        result.MarkdownIndexesGenerated.Should().BeGreaterThan(0);
-
-        // Both formats should have the same count
-        result.HtmlIndexesGenerated.Should().Be(result.MarkdownIndexesGenerated);
-    }
-
     #endregion
 
     #region Index Content Tests
@@ -146,7 +107,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 2);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
@@ -163,7 +124,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 2);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
@@ -181,7 +142,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
@@ -198,7 +159,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var yearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.html");
@@ -206,24 +167,6 @@ public class IndexGenerationServiceTests : IDisposable
 
         content.Should().Contain("../index.html");
         content.Should().Contain("Up");
-    }
-
-    [Fact]
-    public async Task GenerateIndexesAsync_MarkdownIndex_UsesMarkdownFormat()
-    {
-        SetupYearMonthWithMessages(2024, 1, 2);
-
-        await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = false, GenerateMarkdownIndexes = true },
-            CancellationToken.None);
-
-        var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.md");
-        var content = await File.ReadAllTextAsync(monthIndex);
-
-        // Should contain markdown table format
-        content.Should().Contain("| Subject |");
-        content.Should().Contain("|---------|");
-        content.Should().Contain(".md)");
     }
 
     #endregion
@@ -236,7 +179,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupMultipleYearMonths([(2023, 6), (2023, 12), (2024, 1), (2024, 2)]);
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -259,7 +202,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupMultipleYearMonths([(2024, 1), (2024, 2), (2024, 3)]);
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -279,7 +222,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupMultipleYearMonths([(2024, 1), (2024, 2), (2024, 12)]);
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -296,17 +239,9 @@ public class IndexGenerationServiceTests : IDisposable
         htmlContent.Should().NotContain("February/index.html");
         htmlContent.Should().NotContain("December/index.html");
 
-        // Markdown: Year index should use numeric folder paths for month links
-        var mdYearIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "index.md");
-        var mdContent = await File.ReadAllTextAsync(mdYearIndex);
-
-        // Links should use "01/index.md", not "January/index.md"
-        mdContent.Should().Contain("01/index.md");
-        mdContent.Should().Contain("02/index.md");
-        mdContent.Should().Contain("12/index.md");
-        mdContent.Should().NotContain("January/index.md");
-        mdContent.Should().NotContain("February/index.md");
-        mdContent.Should().NotContain("December/index.md");
+        // Verify no markdown indexes are generated
+        var markdownIndexes = Directory.GetFiles(Path.Combine(_testArchiveRoot, "transformed"), "index.md", SearchOption.AllDirectories);
+        markdownIndexes.Should().BeEmpty();
     }
 
     #endregion
@@ -322,7 +257,7 @@ public class IndexGenerationServiceTests : IDisposable
         cts.Cancel();
 
         var result = await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = true },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             cts.Token);
 
         result.Success.Should().BeFalse();
@@ -339,7 +274,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupSingleMessageWithAttachment(2024, 1);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var monthIndex = Path.Combine(_testArchiveRoot, "transformed", "2024", "01", "index.html");
@@ -359,7 +294,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 5);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
@@ -374,7 +309,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");
@@ -382,6 +317,28 @@ public class IndexGenerationServiceTests : IDisposable
 
         content.Should().Contain("1 message");
         content.Should().NotContain("1 messages");
+    }
+
+    #endregion
+
+    #region Markdown Indexes Removed Tests
+
+    [Fact]
+    public async Task GenerateIndexesAsync_NoMarkdownIndexesGenerated()
+    {
+        SetupYearMonthWithMessages(2024, 1, 2);
+
+        var result = await _service.GenerateIndexesAsync(
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
+            CancellationToken.None);
+
+        // Verify no index.md files exist anywhere in the archive
+        var transformedDir = Path.Combine(_testArchiveRoot, "transformed");
+        var markdownIndexFiles = Directory.GetFiles(transformedDir, "index.md", SearchOption.AllDirectories);
+
+        markdownIndexFiles.Should().BeEmpty("no index.md files should be generated");
+        result.HtmlIndexesGenerated.Should().BeGreaterThan(0);
+        result.MarkdownIndexesGenerated.Should().Be(0);
     }
 
     #endregion
@@ -394,7 +351,7 @@ public class IndexGenerationServiceTests : IDisposable
         SetupYearMonthWithMessages(2024, 1, 1);
 
         await _service.GenerateIndexesAsync(
-            new IndexGenerationOptions { GenerateHtmlIndexes = true, GenerateMarkdownIndexes = false },
+            new IndexGenerationOptions { GenerateHtmlIndexes = true },
             CancellationToken.None);
 
         var rootIndex = Path.Combine(_testArchiveRoot, "transformed", "index.html");

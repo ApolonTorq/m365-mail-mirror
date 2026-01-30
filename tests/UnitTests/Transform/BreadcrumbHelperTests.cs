@@ -218,38 +218,6 @@ public class BreadcrumbHelperTests
 
     #endregion
 
-    #region GenerateMarkdownIndexBreadcrumb Tests
-
-    [Fact]
-    public void GenerateMarkdownIndexBreadcrumb_RootIndex_GeneratesArchiveOnly()
-    {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/index.md");
-
-        result.Should().Contain("**Archive**");
-    }
-
-    [Fact]
-    public void GenerateMarkdownIndexBreadcrumb_FolderIndex_GeneratesCorrectBreadcrumb()
-    {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/Inbox/index.md");
-
-        result.Should().Contain("[Archive]");
-        result.Should().Contain("**Inbox**");
-    }
-
-    [Fact]
-    public void GenerateMarkdownIndexBreadcrumb_MonthIndex_GeneratesFullBreadcrumb()
-    {
-        var result = BreadcrumbHelper.GenerateMarkdownIndexBreadcrumb("transformed/Inbox/2024/01/index.md");
-
-        result.Should().Contain("[Archive]");
-        result.Should().Contain("[Inbox]");
-        result.Should().Contain("[2024]");
-        result.Should().Contain("**January**"); // Month is current item
-    }
-
-    #endregion
-
     #region Path Normalization Tests
 
     [Fact]

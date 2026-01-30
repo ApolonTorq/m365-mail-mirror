@@ -32,7 +32,6 @@ A command-line tool to archive your Microsoft 365 mailbox to local EML files wit
         ├── {message}.html            # HTML email view
         ├── {message}.md              # AI-friendly Markdown
         ├── index.html                # Folder navigation (HTML)
-        ├── index.md                  # Folder navigation (Markdown)
         ├── images/                   # Inline images extracted from emails
         │   └── {message}_{n}.{ext}
         └── attachments/              # Regular attachments

@@ -9,11 +9,6 @@ public class IndexGenerationOptions
     /// Whether to generate HTML index files.
     /// </summary>
     public bool GenerateHtmlIndexes { get; init; } = true;
-
-    /// <summary>
-    /// Whether to generate Markdown index files.
-    /// </summary>
-    public bool GenerateMarkdownIndexes { get; init; } = true;
 }
 
 /// <summary>
@@ -54,12 +49,12 @@ public class IndexGenerationResult
     /// <summary>
     /// Creates a successful result.
     /// </summary>
-    public static IndexGenerationResult Successful(int htmlCount, int markdownCount, int errors, TimeSpan elapsed)
+    public static IndexGenerationResult Successful(int htmlCount, int errors, TimeSpan elapsed)
     {
         return new IndexGenerationResult
         {
             HtmlIndexesGenerated = htmlCount,
-            MarkdownIndexesGenerated = markdownCount,
+            MarkdownIndexesGenerated = 0,
             Errors = errors,
             Elapsed = elapsed,
             Success = true
